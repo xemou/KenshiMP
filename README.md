@@ -50,9 +50,9 @@ shared world. Fast-forward is locked to x1.
 - [x] Gameplay safety: host-owned pause, client saves redirected to "<name>_MP", faction-standing
       table synced to mirror factions, NPC recruitment = ownership transfer (player chars blocked),
       host keeps zones loaded around remote players, hotkeys only when the game has focus
-- [ ] Items/containers/trading, weather, production, carrying bodies, chat UI (see GUIDE_FR.md §7)
+- [ ] Items/containers/trading, weather, production, carrying bodies, chat UI (see GUIDE.md §7)
 
-See GUIDE_FR.md for install, config, troubleshooting, known limits and anticipated risks.
+See [GUIDE.md](GUIDE.md) for install, config, troubleshooting, known limits and anticipated risks, [RISKS.md](RISKS.md) for the multiplayer risk register and [ROADMAP.md](ROADMAP.md) for what is left to do.
 
 ## Known setup pitfalls (fixed on this machine)
 - Plugin must be built with /GL + /LTCG (else KenshiLib::GetRealAddress asserts, game crashes).
@@ -76,7 +76,11 @@ Windows SDK 7.1 ISO into `deps\vc2010`, KenshiLib headers from `deps\KenshiLib\I
 2. Copy `dist\KenshiMP\` into `[Kenshi]\mods\`, edit `mods\KenshiMP\kenshimp.cfg`.
 3. Enable KenshiMP in the launcher's Mods tab. Host opens TCP port 47000.
 
-## Licence
+## Documentation
+- [GUIDE.md](GUIDE.md) - install, usage, options, troubleshooting, limits
+- [RISKS.md](RISKS.md) - multiplayer risk register
+- [ROADMAP.md](ROADMAP.md) - roadmap
 
-GPLv3 (voir [LICENSE](LICENSE)), comme KenshiLib dont le plugin dépend.
+## License
 
+GPLv3 (see [LICENSE](LICENSE)), like KenshiLib which the plugin depends on.
