@@ -44,6 +44,7 @@ struct Config
     bool tuneSpeedMatch, tuneTrail, tuneRepath, tuneUnblock, tuneOnScreen;
     bool ghostNoCollide;   // experimental (off): ghosts are not pushed aside by nearby bodies
     bool loadSharing;      // host: a client far from the host simulates its own surroundings
+    bool assaultHostility; // attacking a player's characters outside a war lowers their faction's relation
     std::string autotestLoad;  // test: save loaded automatically from the title screen
     bool autotest;             // test: scripted checks once another player is there (log "autotest:")
     std::string lobbyKeyName;
@@ -51,7 +52,7 @@ struct Config
                relation(0), ghostAI("none"), syncAppearance(true), syncEquipment(true), syncBuildings(true),
                debugKeys(false), npcSync(true), strictMods(true), autoReconnect(true), pauseSync(true),
                renderSmoothing(true), weatherSync(true), lobbyKey(VK_F4), lobbyKeyName("F4"), language("auto"), playersOnMap(true),
-               tuneSpeedMatch(true), tuneTrail(true), tuneRepath(true), tuneUnblock(true), tuneOnScreen(true), ghostNoCollide(false), loadSharing(false), autotest(false) {}
+               tuneSpeedMatch(true), tuneTrail(true), tuneRepath(true), tuneUnblock(true), tuneOnScreen(true), ghostNoCollide(false), loadSharing(false), assaultHostility(false), autotest(false) {}
 };
 
 extern mp::Session g_session;
@@ -106,7 +107,8 @@ void chars_releaseGhost(uint32_t id);
 void chars_claimNpc(uint32_t id, Character* c);   // take over a world NPC (host drops its copy)
 void chars_claimWhenNear(uint32_t id, Character* c);  // same, once one of our characters is next to it (host range)
 bool chars_isClaimed(Character* c);
-Character* chars_nextGhost(Character* after);   // cycles through the ghosts (debug camera)
+Character* chars_nextGhost(Character* after);
+std::string chars_debugShoot(Character* me);   // test: our character fires at a ghost   // cycles through the ghosts (debug camera)
 void chars_localCharacters(std::vector<std::pair<uint32_t, Character*> >& out);   // our replicated squad
 Character* chars_ghostNear(uint8_t owner, const Ogre::Vector3& pos, float maxDist); // that player's nearest ghost
 bool chars_debugAttack(Character* attacker, Character* target);   // debug: attack order
@@ -160,6 +162,8 @@ void trade_onPlayerLeft(uint8_t id);
 void trade_onWorldReload();
 void trade_endAll();
 bool lobby_pressTitleButton(const char* suffix);   // test runs: click a title screen button by name
+void lobby_factionsTick();                          // diplomacy buttons in the game's Factions screen
+bool lobby_debugOpenFactions(uint8_t player, bool open);   // test: show that player's faction there
 std::string ground_debugGiveBag(Character* c);     // test: a backpack holding two items, put in c's inventory
 std::string ground_debugDropBag(Character* c);     // test: drop that backpack on the ground                         // close our trade window (and tell the partner)   // debug: first item out of a nearby remote backpack
 std::string ground_debugPickup(Character* taker);   // debug: nearest ground item -> taker
@@ -199,7 +203,8 @@ std::string chat_clean(const std::string& in);   // strip control characters, es
 
 // KenshiMP.cpp: diplomacy with one player (id) or everybody (-1); value -100 war .. 100 allies
 void diplomacy_set(int player, float value);
-float diplomacy_relation(uint8_t player);   // our relation with that player's faction (0 if unknown)
+float diplomacy_relation(uint8_t player);
+void diplomacy_assaulted(uint8_t player);   // that player hurt one of our characters (assault_hostility)   // our relation with that player's faction (0 if unknown)
 
 // Weather.cpp: weather from the host
 bool weather_install();

@@ -38,6 +38,8 @@ under the pause menu (Esc), or press **F4** at any time. The mod speaks the game
    To trade, bring one of your characters next to one of theirs and click **TRADE**; the other
    player gets a message and clicks **ACCEPT** on your line. The game's trade window opens on
    both sides: drag items from one inventory to the other. Esc ends the trade.
+   The same WAR / PEACE / ALLY / TRADE buttons also appear in the game's own Factions screen when
+   another player's faction is selected.
 
 Everything can also be set by hand in `kenshimp.cfg`:
 - **Host**: `mode=host`, start a game (new or loaded). The TCP port (47000 by default) must be
@@ -81,6 +83,7 @@ Everything can also be set by hand in `kenshimp.cfg`:
 | show_players_on_map | 1 | other players' squads on the world map (except when at war) |
 | ghost_no_collide | 0 | experimental: other players' characters are no longer pushed by your characters (fewer catch-up jumps in a crowd); not yet tried in game |
 | load_sharing | 0 | (host, experimental) load sharing: a player more than 3000 units away from the host runs the world around them on their own PC and the host stops simulating that region; back within 2000 units, the host takes over again (a single shared world). When you meet up, the NPCs around the client are replaced by the host's |
+| assault_hostility | 0 | like Kenshi's factions: a player whose characters hurt yours while you are not at war loses standing with you (-25 per assault, at most one every 3 s); below zero it is war |
 | render_smoothing | 1 | other players' model drawn on the smoothed path |
 | password | (empty) | game password (identical on host and clients) |
 | debug_keys | 0 | testing only: F11 building, F8 clock +3 h, F3 camera on another player, F1 attack another player's first character, F2 take the first item of an open inventory, F5 reload the "kmptest" save; blow-by-blow log |

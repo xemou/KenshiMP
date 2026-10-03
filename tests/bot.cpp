@@ -328,6 +328,12 @@ int main(int argc, char** argv)
                 printf("[bot] our copy now carries %d stack(s)\n", (int)inv.size());
                 continue;
             }
+            if (e.kind == NetEvent::EV_MESSAGE && e.msgType == MSG_SHOT)
+            {
+                ByteReader r(e.body); uint32_t shooter = r.u32(); TargetRef t; t.read(r);
+                if (r.ok()) printf("[bot] SHOT received from player %d: %08x at target kind %d id %08x\n", (int)e.sender, shooter, (int)t.kind, t.netId);
+                continue;
+            }
             if (e.kind == NetEvent::EV_MESSAGE && e.msgType == MSG_ITEM_UNDO)
             {
                 ByteReader r(e.body);
@@ -467,7 +473,19 @@ int main(int argc, char** argv)
                         for (size_t f = 0; f < st.flesh.size(); ++f) if (st.flesh[f] > -8.f) st.flesh[f] = -8.f;
                     }
                     swapRef(st.combatTarget); swapRef(st.taskSubject);
-                    if (fightTarget && i == 0) { st.combatTarget = TargetRef(); st.combatTarget.kind = TargetRef::NET_CHARACTER; st.combatTarget.netId = fightTarget; fightTarget = 0; }
+                    if (fightTarget && i == 0)
+                    {
+                        st.combatTarget = TargetRef(); st.combatTarget.kind = TargetRef::NET_CHARACTER; st.combatTarget.netId = fightTarget;
+                        static DWORD lastShot = 0;
+                        if (GetTickCount() - lastShot > 2000)   // our copy "fires" every 2 s: its ghost on the host must repeat it
+                        {
+                            lastShot = GetTickCount();
+                            ByteWriter sw; sw.u32(st.netId); st.combatTarget.write(sw); sw.u8(0); sw.f32(st.x - 60.f); sw.f32(st.y + 15.f); sw.f32(st.z);
+                            s.send(MSG_SHOT, sw.data);
+                            printf("[bot] shot sent (our %08x at %08x)\n", st.netId, fightTarget);
+                        }
+                        fightTarget = 0;
+                    }
                     if (st.combatTarget.kind != TargetRef::NONE && !lastCombat)
                         printf("[bot] host character in combat, target kind %d id %08x -> ghost mirrors it\n", (int)st.combatTarget.kind, st.combatTarget.netId);
                     lastCombat = st.combatTarget.kind != TargetRef::NONE;
@@ -801,7 +819,8 @@ int main(int argc, char** argv)
         if (script == 3 && since >= 50)
         {
             script = 4;
-            ByteWriter w; w.u8(HOST_ID); w.f32(-100.f); s.send(MSG_FACTION_RELATION, w.data);
+            char nowar[8]; size_t nwl = 0;   // KMP_TEST_NOWAR=1: stay at peace (assault test)
+            ByteWriter w; w.u8(HOST_ID); w.f32(getenv_s(&nwl, nowar, sizeof(nowar), "KMP_TEST_NOWAR") == 0 && nwl > 1 ? 0.f : -100.f); s.send(MSG_FACTION_RELATION, w.data);
             printf("[bot] script: war declared\n");
         }
         if (script == 4 && since >= 75)

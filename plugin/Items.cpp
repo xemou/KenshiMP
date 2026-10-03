@@ -817,7 +817,12 @@ std::string items_debugLoot(Character* taker)
 // the equipment sync: ranged fight test). Tries each one until the engine accepts it.
 bool safeEquipOn(Character* c, Item* it)
 {
-    __try { return c->inventory && c->inventory->equipItem(it); }
+    __try
+    {
+        if (!c->giveItem(it, false, true)) return false;   // as the ghosts get their gear (it takes the ranged slot)
+        if (!it->isEquipped && c->inventory) c->inventory->equipItem(it);
+        return it->isEquipped;
+    }
     __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 std::string items_debugEquipCrossbow(Character* c)
@@ -832,7 +837,7 @@ std::string items_debugEquipCrossbow(Character* c)
             if (!g || (g->stringID.find("gamedata.base") != std::string::npos) != (pass == 0)) continue;
             InvItem d; d.item = g->stringID; d.quantity = 1;
             Item* it = create(d);
-            if (!it || !c->inventory || !safeAdd(c->inventory, it, 1)) continue;
+            if (!it) continue;
             if (safeEquipOn(c, it))
             {
                 if (c->stats) c->stats->rangedMode = true;   // shoot, do not close in

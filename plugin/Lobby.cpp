@@ -7,6 +7,8 @@
 #include <kenshi/Globals.h>
 #include <kenshi/PlayerInterface.h>
 #include <kenshi/Faction.h>
+#include <kenshi/gui/ManagementScreen.h>
+#include <kenshi/gui/FactionsScreen.h>
 #include <mygui/MyGUI.h>
 
 #include "Shared.h"
@@ -361,6 +363,77 @@ namespace
         if (n.find("Button") != std::string::npos && w->getInheritedVisible()) { out += n; out += ' '; }
         for (size_t i = 0; i < w->getChildCount(); ++i) listButtons(w->getChildAt(i), out, depth + 1);
     }
+}
+
+// ---------------------------------------------------------------- the game's Factions screen
+// When another player's faction is selected there, the same WAR / PEACE / ALLY / TRADE buttons
+// as in the Multiplayer window appear under its description (same handlers).
+namespace
+{
+    MyGUI::Widget* g_facBar = NULL;
+    MyGUI::Widget* g_facParent = NULL;
+    std::string g_facShown;
+
+    FactionsScreen* factionsScreen()
+    {
+        ManagementScreen* ms = ManagementScreen::getSingleton();
+        return ms ? ms->factionScreen : NULL;
+    }
+    void hideFactionBar() { if (g_facBar) g_facBar->setVisible(false); }
+}
+
+void lobby_factionsTick()
+{
+    try
+    {
+        FactionsScreen* fs = factionsScreen();
+        if (!fs || !fs->mainWidget || !fs->getVisible() || !fs->selectedFaction || !ready()) { hideFactionBar(); return; }
+        int player = -1;
+        std::vector<PlayerInfo> ps = g_session.players();
+        for (size_t i = 0; i < ps.size() && player < 0; ++i)
+            if (ps[i].id != g_session.localId() && factionFor(ps[i].id) == fs->selectedFaction) player = ps[i].id;
+        if (player < 0) { hideFactionBar(); return; }
+        float rel = diplomacy_relation((uint8_t)player);
+        char sig[64]; sprintf_s(sig, "%d:%.0f:%d", player, rel, (int)trade_pendingFrom((uint8_t)player));
+        if (g_facBar && g_facParent != fs->mainWidget) { g_facBar = NULL; g_facShown.clear(); }   // the screen was rebuilt (its widgets with it)
+        if (!g_facBar || g_facShown != sig)
+        {
+            if (g_facBar) MyGUI::Gui::getInstance().destroyWidget(g_facBar);
+            MyGUI::Widget* parent = fs->mainWidget;
+            int w = parent->getWidth(), h = parent->getHeight(), bw = 92, gap = 6, bh = 30;
+            g_facBar = parent->createWidget<MyGUI::Widget>("", MyGUI::IntCoord(16, h - bh - 16, w - 32, bh), MyGUI::Align::Left | MyGUI::Align::Bottom, "KenshiMP_FactionBar");
+            g_facParent = parent;
+            g_facShown = sig;
+            const char* state = rel < 0 ? T("at war") : rel > 50 ? T("allied") : T("neutral");
+            MyGUI::TextBox* label = g_facBar->createWidget<MyGUI::TextBox>("Kenshi_TextboxStandardText",
+                MyGUI::IntCoord(0, 0, g_facBar->getWidth() - 4 * (bw + gap), bh), MyGUI::Align::Default);
+            label->setCaption(MyGUI::UString(std::string("KenshiMP : ") + state));
+            const char* caps[4] = { "War", "Peace", "Ally", trade_pendingFrom((uint8_t)player) ? "Accept" : "Trade" };
+            const char kinds[4] = { 'w', 'p', 'a', 't' };
+            for (int k = 0; k < 4; ++k)
+            {
+                char name[48]; sprintf_s(name, "KMP_Dip_%d_%c", player, kinds[k]);   // same handler as the Multiplayer window
+                MyGUI::Button* b = g_facBar->createWidget<MyGUI::Button>("Kenshi_Button1",
+                    MyGUI::IntCoord(g_facBar->getWidth() - (4 - k) * (bw + gap), 0, bw, bh), MyGUI::Align::Default, name);
+                b->setCaption(T(caps[k]));
+                b->eventMouseButtonClick += MyGUI::newDelegate(onButton);
+            }
+            log("factions screen: diplomacy buttons shown for %s (%s)", playerName((uint8_t)player).c_str(), state);
+        }
+        g_facBar->setVisible(true);
+    }
+    catch (...) { g_facBar = NULL; g_facShown.clear(); }
+}
+
+// Test runs: open the Factions screen on that player's faction (no click needed).
+bool lobby_debugOpenFactions(uint8_t player, bool open)
+{
+    ManagementScreen* ms = ManagementScreen::getSingleton();
+    FactionsScreen* fs = factionsScreen();
+    if (!ms || !fs) return false;
+    ms->setVisible(open, 1);   // tab 1 = FACTIONS
+    if (open) fs->selectedFaction = factionFor(player);
+    return true;
 }
 
 // Test runs: press a visible title screen button whose widget name ends with `suffix` (as a click

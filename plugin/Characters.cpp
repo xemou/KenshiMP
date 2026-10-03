@@ -39,6 +39,8 @@
 #include <kenshi/Building/Building.h>
 #include <kenshi/combat/CombatClass.h>
 #include <kenshi/GunClass.h>
+#include <kenshi/combat/RangedCombatClass.h>
+#include <kenshi/Gear.h>
 #include <kenshi/Animation/AnimationClass.h>
 #include <core/Functions.h>
 
@@ -53,6 +55,8 @@
 #include <vector>
 
 using namespace mp;
+
+static bool g_replayingShot = false;   // a ghost firing because its owner did (MSG_SHOT)
 
 namespace kmp {
 
@@ -268,6 +272,50 @@ namespace
         __try { return f->createNewEmptyActivePlatoon(squadTemplate, true, *p); }
         __except (EXCEPTION_EXECUTE_HANDLER) { return NULL; }
     }
+    // A ghost repeats its owner's shot with its own weapon (1 fired, 0 no weapon, -1 failed).
+    GunClass* safeGunOf(Character* c)
+    {
+        __try
+        {
+            if (c->rangedCombat) if (GunClass* g = c->rangedCombat->getGun()) return g;
+            Crossbow* cb = c->getRangedWeapon();
+            return cb ? cb->gunClass : NULL;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return NULL; }
+    }
+    bool safeShoot(GunClass* g, Character* c, RootObject* target, int stat, const Ogre::Vector3* aim)
+    {
+        __try
+        {
+            if (g->numShotsCurrent <= 0) g->numShotsCurrent = g->numShotsMax > 0 ? g->numShotsMax : 1;   // the owner had a loaded weapon
+            g->shoot(c, target, (StatsEnumerated)stat, *aim);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    int replayShot(Character* ghost, RootObject* target, int stat, const Ogre::Vector3* aim)
+    {
+        GunClass* g = safeGunOf(ghost);
+        if (!g) return 0;
+        g_replayingShot = true;
+        bool ok = safeShoot(g, ghost, target, stat, aim);
+        g_replayingShot = false;
+        return ok ? 1 : -1;
+    }
+
+    // Debug: what decides whether a character shoots.
+    void safeRangedInfo(Character* c, int* bow, int* rangedMode, int* inRanged, int* wants)
+    {
+        __try
+        {
+            *bow = c->getRangedWeapon() ? 1 : 0;
+            *rangedMode = c->stats ? (c->stats->rangedMode ? 1 : 0) : -1;
+            *inRanged = c->isInRangedCombatMode() ? 1 : 0;
+            *wants = c->shouldUseRangedWeapons() ? 1 : 0;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {}
+    }
+
     ActivePlatoon* safeActive(Platoon* p)
     {
         __try { return p->getActivePlatoon(); }
@@ -627,7 +675,7 @@ namespace
 
     Character* localByNetId(uint32_t id);
 
-    void applyIncomingDamage(const DamageMsg& d)
+    void applyIncomingDamage(const DamageMsg& d, uint8_t sender)
     {
         Character* c = localByNetId(d.victimNetId);   // our squad member or (host) a world NPC
         if (!c || d.bodyPart >= c->medical.anatomy.size()) return;
@@ -646,6 +694,8 @@ namespace
             }
         Damages dmg(d.cut, d.blunt, d.pierce, 1.0f, 0.0f);
         applyRealDamage(c, c->medical.anatomy[d.bodyPart], dmg);
+        // A player hurt one of OUR characters (not a world NPC we host): an assault, Kenshi-style.
+        if (!isNpcNetId(d.victimNetId) && sender != g_session.localId()) diplomacy_assaulted(sender);
     }
 
     // ------------------------------------------------------------------ ghosts
@@ -1090,6 +1140,13 @@ namespace
                 bool attacked = safeAttack(c, enemy);
                 if (ordered || attacked) g.combatTarget = enemy;
                 log("ghost %08x engages %08x (order=%d attack=%d)", s.netId, s.combatTarget.netId, (int)ordered, (int)attacked);
+                if (g_cfg.debugKeys)
+                {
+                    int bow = -1, rangedMode = -1, inRanged = -1, wants = -1;
+                    safeRangedInfo(c, &bow, &rangedMode, &inRanged, &wants);
+                    log("ghost %08x ranged state: weapon %d, ranged toggle %d, in ranged mode %d, should use ranged %d, distance %.0f",
+                        s.netId, bow, rangedMode, inRanged, wants, c->getPosition().distance(enemy->getPosition()));
+                }
                 g.mirroredTask = -1;
             }
             return;
@@ -1513,6 +1570,18 @@ Character* chars_ghostNear(uint8_t owner, const Ogre::Vector3& pos, float maxDis
         if (d <= bestD) { bestD = d; best = c; }
     }
     return best;
+}
+
+std::string chars_debugShoot(Character* me)
+{
+    Character* target = NULL;
+    for (std::map<uint32_t, Ghost>::iterator it = g_ghosts.begin(); it != g_ghosts.end() && !target; ++it)
+        if (!isNpcNetId(it->first)) target = it->second.h.getCharacter();
+    if (!target) return "no ghost to aim at";
+    GunClass* g = safeGunOf(me);
+    if (!g) return "no ranged weapon";
+    Ogre::Vector3 aim = target->getPosition() + Ogre::Vector3(0, 15, 0);
+    return safeShoot(g, me, target, 0, &aim) ? "shot fired at " + target->getName() : "the engine refused the shot";
 }
 
 Character* chars_nextGhost(Character* after)
@@ -2047,7 +2116,26 @@ void chars_onMessage(const NetEvent& e)
         uint8_t target = r.u8();
         DamageMsg d; d.read(r);
         d.sanitize();
-        if (r.ok() && target == g_session.localId()) applyIncomingDamage(d);
+        if (r.ok() && target == g_session.localId()) applyIncomingDamage(d, e.sender);
+        break;
+    }
+    case MSG_SHOT:
+    {
+        uint32_t shooter = r.u32();
+        TargetRef t; t.read(r);
+        uint8_t stat = r.u8();
+        float ax = r.f32(), ay = r.f32(), az = r.f32();
+        if (!r.ok() || netIdOwner(shooter) != e.sender || !validPos(ax, ay, az)) break;
+        Character* ghost = chars_byNetId(shooter);
+        RootObject* target = resolveTargetRef(t);
+        if (!ghost || !chars_isGhost(ghost) || !target) break;
+        Ogre::Vector3 aim(ax, ay, az);
+        int fired = replayShot(ghost, target, stat, &aim);
+        if (g_cfg.debugKeys)
+        {
+            static int shown = 0;
+            if (shown < 20) { ++shown; log("ghost %08x fires as its owner did: %s", shooter, fired > 0 ? "shot" : fired == 0 ? "no ranged weapon" : "engine refused"); }
+        }
         break;
     }
     }
@@ -2119,8 +2207,16 @@ namespace
             }
         }
 
-        bool attackerIsGhost = g_hitAttacker ? chars_isGhost(static_cast<Character*>(g_hitAttacker))
-                                             : (dmg.pierce > 0 && takeGhostShot(victim));
+        bool ghostProjectile = !g_hitAttacker && dmg.pierce > 0 && takeGhostShot(victim);
+        bool attackerIsGhost = g_hitAttacker ? chars_isGhost(static_cast<Character*>(g_hitAttacker)) : ghostProjectile;
+        if (ghostProjectile)
+        {
+            // A ghost's shot only shows what its owner did; the owner's machine computed the real
+            // hit and sends it to the victim's owner. Whoever the victim is (one of ours, a ghost,
+            // a world NPC), this copy deals nothing.
+            if (g_cfg.debugKeys) log("hit on %s dropped: a ghost's projectile (its owner sends the real hit)", victim->getName().c_str());
+            return HIT_DROP;
+        }
         uint32_t ghostId = ghostIdOf(victim);
         if (ghostId)
         {
@@ -2138,11 +2234,7 @@ namespace
             return HIT_FORWARDED;
         }
         // A ghost hitting one of our replicated characters: the real hit arrives by network.
-        if (attackerIsGhost && chars_netIdOf(victim))
-        {
-            if (g_cfg.debugKeys && !g_hitAttacker) log("hit on %s dropped: a ghost's projectile (its owner sends the real hit)", victim->getName().c_str());
-            return HIT_DROP;
-        }
+        if (attackerIsGhost && chars_netIdOf(victim)) return HIT_DROP;
         return HIT_APPLY;
     }
 }
@@ -2205,6 +2297,24 @@ HitMaterialType charHit_hook(Character* self, CutDirection dir, Damages& dmg, Ch
 void (*gunShoot_orig)(GunClass*, Character*, RootObject*, StatsEnumerated, const Ogre::Vector3&) = NULL;
 void gunShoot_hook(GunClass* self, Character* me, RootObject* target, StatsEnumerated stat, const Ogre::Vector3& aim)
 {
+    // One of ours (or, on the host, a world NPC) fired: its ghosts on the other machines fire the
+    // same shot. Only the visual: the hit, if any, is computed here and routed as usual.
+    if (!g_replayingShot && me && kmp::ready() && !chars_isGhost(me))
+    {
+        uint32_t id = chars_netIdOf(me);
+        if (!id && g_session.isHost()) id = npcs_netIdOf(me);
+        if (id)
+        {
+            ByteWriter w; w.u32(id); makeTargetRef(target).write(w); w.u8((uint8_t)stat);
+            w.f32(aim.x); w.f32(aim.y); w.f32(aim.z);
+            g_session.send(MSG_SHOT, w.data);
+        }
+    }
+    if (g_cfg.debugKeys && me)
+    {
+        static int shown = 0;
+        if (shown < 20) { ++shown; log("shot by %s (%s)", me->getName().c_str(), chars_isGhost(me) ? "ghost" : "not a ghost"); }
+    }
     if (target && me && chars_isGhost(me))
     {
         // Flight time from the distance and the weapon's shot speed, plus a margin.

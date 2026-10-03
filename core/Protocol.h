@@ -16,7 +16,7 @@
 
 namespace mp {
 
-const uint32_t PROTOCOL_VERSION = 13;
+const uint32_t PROTOCOL_VERSION = 14;
 
 // World NPCs replicated by the host use the upper half of the host's local id space.
 const uint32_t NPC_ID_FLAG = 0x800000;
@@ -62,7 +62,8 @@ enum MsgType
     MSG_GROUND_TAKE,      // u8 targetPlayer, u32 netId : we picked up our copy of the target's item
     MSG_TRADE,            // u8 targetPlayer, u8 action (0 request, 1 accept, 2 end), u32 senderChar, u32 targetChar
     MSG_ITEM_UNDO,        // u8 targetPlayer, u8 action (UNDO_*), u8 kind (CONTAINER_*), u32 netId, InvItem : the owner refused that transfer
-    MSG_ZONE_MODE         // h->c u8 targetPlayer, u8 shared : 1 = the host simulates the world around you, 0 = you do (far from the host)
+    MSG_ZONE_MODE,        // h->c u8 targetPlayer, u8 shared : 1 = the host simulates the world around you, 0 = you do (far from the host)
+    MSG_SHOT              // u32 shooterNetId, TargetRef target, u8 stat, f32 aimX, aimY, aimZ : that character fired (its ghosts fire too, harmlessly)
 };
 
 inline bool isRelayed(uint8_t t) { return t >= MSG_ENTITY_STATE; }

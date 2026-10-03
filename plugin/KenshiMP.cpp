@@ -145,6 +145,7 @@ namespace
             else if (k == "tune_onscreen") g_cfg.tuneOnScreen = toBool(v);
             else if (k == "ghost_no_collide") g_cfg.ghostNoCollide = toBool(v);
             else if (k == "load_sharing") g_cfg.loadSharing = toBool(v);
+            else if (k == "assault_hostility") g_cfg.assaultHostility = toBool(v);
             else if (k == "autotest_load") g_cfg.autotestLoad = v;
             else if (k == "autotest") g_cfg.autotest = toBool(v);
             else if (k == "lobby_key")
@@ -294,6 +295,33 @@ float diplomacy_relation(uint8_t player)
     Faction* theirs = factionFor(player);
     if (!mine || !mine->relations || !theirs) return 0.f;
     return mine->relations->getFactionRelation(theirs);
+}
+
+// assault_hostility=1: like Kenshi's own factions, a player whose characters hurt ours while we are
+// not at war loses standing with us (-25 per assault, at most one every 3 s); below zero it is war.
+// Allies are not exempt (an ally who attacks is no ally), but the war only starts below zero.
+void diplomacy_assaulted(uint8_t player)
+{
+    if (!g_cfg.assaultHostility || !g_players.count(player)) return;
+    static std::map<uint8_t, DWORD> last;
+    DWORD now = GetTickCount();
+    if (last.count(player) && now - last[player] < 3000) return;
+    last[player] = now;
+    float rel = diplomacy_relation(player);
+    if (rel < 0) return;   // already at war: fighting is expected
+    float next = rel - 25.f;
+    if (next < 0)
+    {
+        diplomacy_set(player, -100.f);
+        chat_notice(TF("%s attacked your squad: you are now at war.", playerName(player).c_str()));
+        log("assault by %s: war", playerName(player).c_str());
+        return;
+    }
+    setRelationWith(player, next);
+    ByteWriter w; w.u8(player); w.f32(next);
+    g_session.send(MSG_FACTION_RELATION, w.data);
+    chat_notice(TF("%s attacked your squad (relation %.0f).", playerName(player).c_str(), next));
+    log("assault by %s: relation %.0f -> %.0f", playerName(player).c_str(), rel, next);
 }
 
 void diplomacy_set(int only, float value)
@@ -571,10 +599,15 @@ namespace
         if (step == 3 && s >= 15) { step = 4; trade_endAll(); }
         if (step == 4 && s >= 17) { step = 5; log("autotest: backpack take -> %s", items_debugBackpack(me).c_str()); }
         if (step == 5 && s >= 25) { step = 51; builds_debugSpawn(); log("autotest: test building placed"); }
-        if (step == 51 && s >= 56) { step = 6; log("autotest: ground pickup -> %s", ground_debugPickup(me).c_str()); }
+        if (step == 51 && s >= 40) { step = 52; log("autotest: our shot -> %s", chars_debugShoot(me).c_str()); }
+        if (step == 52 && s >= 44) { step = 53; log("autotest: our shot -> %s", chars_debugShoot(me).c_str()); }
+        if (step == 53 && s >= 56) { step = 6; log("autotest: ground pickup -> %s", ground_debugPickup(me).c_str()); }
         if (step == 6 && s >= 60) { step = 7; log("autotest: bag given -> %s", ground_debugGiveBag(me).c_str()); }
         if (step == 7 && s >= 63) { step = 8; log("autotest: bag dropped -> %s", ground_debugDropBag(me).c_str()); }
-        if (step == 8 && s >= 95) { step = -1; chars_logHitStats(); log("autotest: done"); }
+        if (step == 8 && s >= 66) { step = 81; log("autotest: factions screen opened -> %d", (int)lobby_debugOpenFactions(other, true)); }
+        if (step == 81 && s >= 69) { step = 82; log("autotest: ALLY pressed in the factions screen -> %d", (int)lobby_pressTitleButton("KMP_Dip_1_a")); }
+        if (step == 82 && s >= 72) { step = 83; log("autotest: relation with %s now %.0f", playerName(other).c_str(), diplomacy_relation(other)); lobby_debugOpenFactions(other, false); }
+        if (step == 83 && s >= 95) { step = -1; chars_logHitStats(); log("autotest: done"); }
     }
 
     bool gameFocused()
@@ -690,6 +723,7 @@ namespace
         static bool f8 = false;
         if (keyPressed(VK_F8, f8) && g_cfg.debugKeys) world_debugShift();
         autotestTick(GetTickCount());
+        lobby_factionsTick();
         // F6 (debug): trade with the first other player (ask, or accept their offer).
         static bool f6 = false;
         if (keyPressed(VK_F6, f6) && g_cfg.debugKeys)

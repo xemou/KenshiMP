@@ -99,6 +99,8 @@ namespace
         { "allied", "allié" },
         { "neutral", "neutre" },
         { "Trade", "Échanger" },
+        { "%s attacked your squad: you are now at war.", "%s a attaqué votre escouade : vous êtes maintenant en guerre." },
+        { "%s attacked your squad (relation %.0f).", "%s a attaqué votre escouade (relation %.0f)." },
         { "%s refused the payment (too far from the trader?).", "%s a refusé le paiement (trop loin du marchand ?)." },
         { "%s kept %s (someone was faster, or you were too far).", "%s garde %s (quelqu'un a été plus rapide, ou vous étiez trop loin)." },
         { "%s could not take %s: it is back in your inventory.", "%s n'a pas pu prendre %s : l'objet est revenu dans votre inventaire." },
