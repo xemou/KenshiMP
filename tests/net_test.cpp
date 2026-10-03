@@ -324,7 +324,12 @@ static void misbehavingPeerTests()
         ByteReader r(f); r.u8();
         std::string why = r.str();
         CHECK(why.find("version") != std::string::npos);
+        CHECK(why.find("The host must update") != std::string::npos);   // the newer one is the player here
         CHECK(p.closedWithin(3000));
+        NetEvent w;
+        CHECK(waitEvent(host, NetEvent::EV_WARNING, w));                 // and the host is told who could not join
+        CHECK(w.text.find("Old could not join") != std::string::npos);
+        printf("  version mismatch: '%s' / host: '%s'\n", why.c_str(), w.text.c_str());
     }
     // Garbage frame (absurd length): dropped without affecting the host.
     {

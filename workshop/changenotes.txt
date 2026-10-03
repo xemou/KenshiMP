@@ -5,7 +5,8 @@ v18 - first public beta (protocol 18)
 - Town chests hold the same things for everybody; looting is validated by the host
 - Other players' names always shown above their characters, in their chat colour
 - Player numbers kept between host restarts (same name = same number)
-- Version shown in the Multiplayer window title: everybody must have the same one
+- Version shown in the Multiplayer window title: everybody must have the same one; a player with another
+  version is told plainly who has to update (and the host is told who could not join)
 
 - The host's save is backed up automatically each time a hosted game starts (KenshiMP\backups, last 5 kept)
 - /report (or BUG REPORT in the Multiplayer window): logs, settings and session summary in one folder on the desktop
