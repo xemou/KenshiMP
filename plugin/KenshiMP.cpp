@@ -1216,6 +1216,7 @@ __declspec(dllexport) void startPlugin()
 {
     InitializeCriticalSection(&g_lock);
     loadConfig();
+    log("KenshiMP v%u starting (the version is the network protocol number)", (unsigned)PROTOCOL_VERSION);
     lang_init();
     bool ok = true;
     if (KenshiLib::SUCCESS != KenshiLib::AddHook(KenshiLib::GetRealAddress(&GameWorld::_NV_mainLoop_GPUSensitiveStuff),

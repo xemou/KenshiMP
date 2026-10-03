@@ -28,3 +28,4 @@ copy /y "tools\Disable KenshiMP.bat" "%D%\" >nul
 copy /y tools\kenshimp_enable.ps1 "%D%\" >nul
 copy /y tools\kenshimp_disable.ps1 "%D%\" >nul
 echo Package ready: %~dp0%D%
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\check_package.ps1" -Dir "%~dp0%D%" || exit /b 1

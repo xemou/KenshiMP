@@ -153,7 +153,9 @@ namespace
             g_win = gui->createWidget<MyGUI::Window>("Kenshi_WindowCX", MyGUI::IntCoord((view.width - W) / 2, (view.height - H) / 2, W, H),
                                                      MyGUI::Align::Default, "Popup", "KenshiMP_Lobby");
             if (!g_win) return false;
-            g_win->setCaption(std::string("KenshiMP - ") + T("Multiplayer"));
+            // The version in the title: players compare it before joining (it must be the same).
+            char ver[32]; sprintf_s(ver, " (v%u)", (unsigned)PROTOCOL_VERSION);
+            g_win->setCaption(std::string("KenshiMP - ") + T("Multiplayer") + ver);
             g_win->eventWindowButtonPressed += MyGUI::newDelegate(onWindowButton);
             MyGUI::Widget* c = g_win->getClientWidget() ? g_win->getClientWidget() : g_win;
 

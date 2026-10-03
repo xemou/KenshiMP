@@ -1,0 +1,10 @@
+v18 - first public beta (protocol 18)
+
+- Co-op & PvP multiplayer for Kenshi, up to 8 players, host's world shared (NPCs, time, weather, towns)
+- Join a game already running: GO TO in the Multiplayer window (or /goto) brings your squad next to a friend
+- Town chests hold the same things for everybody; looting is validated by the host
+- Other players' names always shown above their characters, in their chat colour
+- Player numbers kept between host restarts (same name = same number)
+- Version shown in the Multiplayer window title: everybody must have the same one
+
+Back up your saves. Bug reports: github.com/xemou/KenshiMP (attach RE_Kenshi_log.txt and KenshiMP_loader.log).

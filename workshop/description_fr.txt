@@ -12,11 +12,12 @@ Jouez à Kenshi entre amis. Chaque joueur garde son escouade, sa faction, sa bas
 [*] Vrais combats entre joueurs : les dégâts sont calculés par l'attaquant et appliqués par le propriétaire de la victime, jamais deux fois
 [*] Le monde de l'hôte est partagé : PNJ, animaux, heure, météo, pause (vitesse bloquée à x1)
 [*] Bâtiments et villes de chaque joueur, construction, destruction, portes
-[*] Inventaires, coffres, pillage, objets posés au sol, sacs à dos portés, argent des marchands
+[*] Inventaires, coffres, pillage, objets posés au sol, sacs à dos portés, argent des marchands ; les coffres des villes ont le même contenu pour tout le monde
 [*] Échange direct entre joueurs dans la fenêtre d'échange du jeu
 [*] Diplomatie : guerre / paix / alliance par joueur, depuis la fenêtre Multijoueur ou le chat (/guerre, /paix, /allie)
 [*] Chat (Entrée), autres joueurs sur la carte du monde, blessures, membres coupés et prothèses, faim
 [*] Fenêtre Multijoueur (écran titre, menu pause ou F4) : héberger ou rejoindre en deux clics ; en français et en anglais
+[*] Rejoindre une partie déjà lancée : ALLER (ou /aller) amène votre escouade à côté de vos amis, où que votre sauvegarde l'ait laissée
 [*] Partage de charge en option (load_sharing=1, expérimental) : un joueur loin de l'hôte simule ses propres environs, le PC de l'hôte ne fait tourner que sa région
 [/list]
 
@@ -31,14 +32,15 @@ Jouez à Kenshi entre amis. Chaque joueur garde son escouade, sa faction, sa bas
 [olist]
 [*] Abonnez-vous. Sans RE_Kenshi : ouvrez le dossier du mod (steamapps\workshop\content\233860\<numéro de l'objet>) et lancez une fois « Enable KenshiMP.bat » (« Disable KenshiMP.bat » l'annule ; le solo n'est pas touché). Puis cochez KenshiMP dans l'onglet Mods du lanceur. Le mode fenêtré sans bordure est conseillé.
 [*] Hôte : ouvrez la fenêtre Multijoueur (bouton sous le menu titre, ou F4), entrez votre nom et votre faction, cliquez Héberger, puis lancez ou chargez une partie. Donnez votre IP à vos amis.
-[*] Amis : même fenêtre, entrez l'adresse de l'hôte, cliquez Rejoindre, puis lancez une nouvelle partie (conseillé).
+[*] Amis : même fenêtre, entrez l'adresse de l'hôte, cliquez Rejoindre, puis lancez une nouvelle partie (conseillé). Ensuite ALLER à côté de l'hôte dans la fenêtre Multijoueur (ou tapez /aller) pour le retrouver.
 [*] Par Internet : invitez vos amis par Steam (AMIS STEAM > INVITER dans la fenêtre Multijoueur, ou « Rejoindre la partie » sur votre profil) : ni adresse IP, ni port, ni VPN. Copies GOG : ouvrez le port TCP 47000 ou utilisez un VPN de jeu (Radmin, ZeroTier, Tailscale).
 [/olist]
 Les réglages sont enregistrés dans %LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg.
 
 [h2]Limites connues[/h2]
 [list]
-[*] Chaque client garde sa propre sauvegarde ; le monde de l'hôte (villes détruites ou prises, PNJ uniques, portes de ville cassées) y est appliqué pendant la partie.
+[*] Chaque client garde sa propre sauvegarde (enregistrée sous <nom>_MP, votre partie solo n'est pas touchée) ; le monde de l'hôte (villes détruites ou prises, PNJ uniques, portes de ville cassées, coffres des villes) y est appliqué pendant la partie.
+[*] Tous les joueurs doivent avoir la même version de KenshiMP : elle est affichée dans le titre de la fenêtre Multijoueur (v18). Steam met tout le monde à jour automatiquement.
 [*] Jusqu'à 8 joueurs ; l'hôte doit rester connecté (pas de changement d'hôte).
 [*] D'autres mods de code qui modifient les mêmes fonctions du jeu peuvent entrer en conflit.
 [/list]

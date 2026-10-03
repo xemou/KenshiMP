@@ -12,11 +12,12 @@ Play Kenshi with your friends. Every player keeps their own squad, faction, base
 [*] Real combat between players: damage is computed by the attacker and applied by the victim's owner, never twice
 [*] The host's world is shared: NPCs, animals, time of day, weather, pause (speed locked at x1)
 [*] Buildings and towns of each player, construction, destruction, doors
-[*] Inventories, chests, looting, items dropped on the ground, worn backpacks, traders' money
+[*] Inventories, chests, looting, items dropped on the ground, worn backpacks, traders' money; town chests hold the same things for everybody
 [*] Direct trading between players in the game's own trade window
 [*] Diplomacy: war / peace / alliance per player, from the Multiplayer window or the chat (/war, /peace, /ally)
 [*] Chat (Enter), other players on the world map, injuries, lost limbs and prosthetics, hunger
 [*] Multiplayer window (title screen, pause menu or F4): host or join in two clicks; English and French
+[*] Join a game already running: GO TO (or /goto) brings your squad next to your friends wherever your save left it
 [*] Optional load sharing (load_sharing=1, experimental): a player far from the host simulates their own surroundings, so the host's PC only runs its own region
 [/list]
 
@@ -31,14 +32,15 @@ Play Kenshi with your friends. Every player keeps their own squad, faction, base
 [olist]
 [*] Subscribe. Without RE_Kenshi: open the mod's folder (steamapps\workshop\content\233860\<item number>) and run "Enable KenshiMP.bat" once ("Disable KenshiMP.bat" undoes it; single-player is not affected). Then enable KenshiMP in the launcher's Mods tab. Borderless window mode is recommended.
 [*] Host: open the Multiplayer window (button under the title menu, or F4), enter your name and faction, click Host, then start or load a game. Give your IP to your friends.
-[*] Friends: same window, enter the host's address, click Join, then start a fresh game (recommended).
+[*] Friends: same window, enter the host's address, click Join, then start a fresh game (recommended). Then GO TO next to the host in the Multiplayer window (or type /goto) to meet them.
 [*] Over the Internet: invite your friends through Steam (STEAM FRIENDS > INVITE in the Multiplayer window, or "Join game" on your profile): no IP address, no port, no VPN. GOG copies: open TCP port 47000 or use a gaming VPN (Radmin, ZeroTier, Tailscale).
 [/olist]
 Settings are saved in %LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg.
 
 [h2]Known limits[/h2]
 [list]
-[*] Each client keeps its own save; the host's world (towns destroyed or taken over, unique NPCs, broken town doors) is applied to it while playing.
+[*] Each client keeps its own save (saved as <name>_MP, your solo save is untouched); the host's world (towns destroyed or taken over, unique NPCs, broken town doors, town chests) is applied to it while playing.
+[*] All players need the same KenshiMP version: it is shown in the Multiplayer window title (v18). Steam updates everybody automatically.
 [*] Up to 8 players; the host must stay connected (no host migration).
 [*] Other code mods that change the same game functions may conflict.
 [/list]

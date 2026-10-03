@@ -5,9 +5,12 @@ Workshop update must be announced here and in the Workshop "Change Notes".
 Format: one section per Workshop release, newest first. The protocol number is `PROTOCOL_VERSION`
 in `core/Protocol.h`.
 
-## [Unreleased] - first Workshop release (beta)
+## [v18] - first Workshop release (beta), protocol 18
 
-Summary of what the first public build contains (fill in the final protocol number and date at release):
+Date: the day of the upload (write it here, and the Workshop item ID below, once published).
+Workshop item ID: (to fill)
+
+Summary of what the first public build contains:
 
 - Per-player squads, factions, towns; player-vs-player war / peace / alliance
 - Live ghosts of other players: movement (interpolated, no teleport in normal conditions), appearance,
@@ -29,6 +32,7 @@ Summary of what the first public build contains (fill in the final protocol numb
 - Runs without RE_Kenshi on the stock Steam game (loader + address table for 1.0.68,
   `Enable KenshiMP.bat`); RE_Kenshi still supported, both kinds of players can play together
 - Settings in `%LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg`; the packaged template is `mode=off`
+- The version (= protocol number) is shown in the multiplayer window title and in the log
 
 Known limits: see `GUIDE.md` section 7 and `RISKS.md` (items marked as not yet validated in game).
 

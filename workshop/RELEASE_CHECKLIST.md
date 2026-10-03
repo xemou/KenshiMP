@@ -7,11 +7,12 @@ Legend: [x] done (non-code, verified in the repo) · [ ] to do · (you) = only t
 - [x] `NOTICE.md` lists KenshiLib (DLL redistributed for players without RE_Kenshi), RE_Kenshi, Boost, MyGUI, OGRE, Iced and what is not redistributed
 - [x] `NOTICE.md` added to the package and to the "Package content" list
 - [ ] Public GitHub repository reachable at the URL written in the descriptions (`github.com/xemou/KenshiMP`): make sure the repo is public and the `origin` is pushed
-- [ ] Release commit tagged (e.g. `v<protocol>`) and the tag matches the uploaded DLL
+- [ ] Release commit tagged `v18` (`git tag v18`, `git push origin v18`) and the tag matches the uploaded DLL
 - [ ] Workshop wording says "unofficial, not affiliated with Lo-Fi Games" (already in `NOTICE.md`; add to the Workshop page)
 - [ ] No Kenshi / RE_Kenshi / PhysX file in `dist\KenshiMP\` (only the files listed in NOTICE.md; `KenshiLib.dll` is allowed, GPLv3)
 
 ## 2. Package (`dist\KenshiMP\`, built by `package.bat`)
+- [x] `package.bat` ends with `tools\check_package.ps1` (files, default settings, nothing from the game): it must say "package OK"
 - [ ] `KenshiMP.dll` built from the tagged commit (Release, /GL /LTCG)
 - [ ] `KenshiMP.mod` present and opens in the Game Editor without "missing dependency" warnings
 - [ ] `RE_Kenshi.json` = `{ "Plugins" : [ "KenshiMP.dll" ] }`
@@ -24,10 +25,10 @@ Legend: [x] done (non-code, verified in the repo) · [ ] to do · (you) = only t
 ## 3. Steam page
 - [x] Description EN (`workshop/description_en.txt`) and FR (`workshop/description_fr.txt`)
 - [x] Preview image `workshop/preview.png` (512×512, < 1 MB)
-- [ ] Description reviewed against the final features (player limit is 8 = `MAX_PLAYERS`; remove anything not validated)
-- [ ] Add "BETA / back up your saves" line at the top of the description
+- [x] Description reviewed against the v18 features (8 players, GO TO, town chests, version in the window title)
+- [x] "BETA / back up your saves" line at the top of the description
 - [ ] 4-6 extra screenshots (list in `ASSETS.md`)
-- [ ] Item title, tags, change notes ready (`CHANGELOG.md`)
+- [x] Change notes ready (`workshop/changenotes.txt`, `CHANGELOG.md` v18); [ ] title and tags (you)
 - [ ] Steam Workshop legal agreement accepted (you)
 - [ ] Link to RE_Kenshi (Nexus) in the Requirements (optional on Steam, needed on GOG)
 - [ ] Discussion tab: pinned "How to join / bug reports" post
@@ -36,7 +37,7 @@ Legend: [x] done (non-code, verified in the repo) · [ ] to do · (you) = only t
 Items still marked 🧪 in `RISKS.md` / `ROADMAP.md`:
 - [ ] Trader money, client "Connecting..." message, task animations, near-NPC immunity
 - [ ] Protocol additions of the latest builds (ground items, trade, backpacks)
-- [ ] **A real session between two PCs** over a VPN or a forwarded port (the main remaining unknown)
+- [ ] **A real session between two PCs** (Steam invitation, or a VPN): follow `workshop/TEST_AMI.md` (the main remaining unknown)
 - [ ] Clean-install test without RE_Kenshi: fresh Steam Kenshi, mod subscribed, `Enable KenshiMP.bat` from the Workshop folder, host and join
 - [ ] Clean-install test with RE_Kenshi + PhysX, host and join (and a mixed session: one player with, one without)
 - [ ] Workshop-folder test (local `mods\KenshiMP` removed, plugin loaded from `steamapps\workshop\content\233860\<id>\`)
