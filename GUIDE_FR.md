@@ -222,3 +222,7 @@ l'hôte et rejoue un monde enregistré (PNJ, inventaires, météo, horloge).
 - `bot.exe 127.0.0.1 47000 170 4 stream.rec` enregistre le flux de PNJ de l'hôte ;
   `bot.exe --host-replay stream.rec 47000` le rejoue en hébergeant, avec Kenshi en `mode=join`
   (pour tester le côté client).
+- **Test du côté client en deux étapes** : `tests\test_client.bat record` (Kenshi héberge, le bot
+  enregistre), puis `tests\test_client.bat` (le bot héberge et rejoue, Kenshi rejoint en client). Le
+  script affiche ce qu'il faut vérifier : ALLER, coffres de ville (le bot répond avec de vrais objets et
+  valide ce que vous prenez), /rapport.

@@ -211,3 +211,6 @@ replays a recorded world (NPCs, inventories, weather, clock).
 - `bot.exe 127.0.0.1 47000 170 4 stream.rec` records the host's NPC stream;
   `bot.exe --host-replay stream.rec 47000` replays it while hosting, with Kenshi in `mode=join`
   (to test the client side).
+- **Client test in two steps**: `tests\test_client.bat record` (Kenshi hosts, the bot records), then
+  `tests\test_client.bat` (the bot hosts and replays, Kenshi joins as a client). It lists what to
+  check: GO TO, town containers (the bot answers with real items and validates what you take), /report.

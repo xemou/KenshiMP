@@ -9,6 +9,8 @@ humain (seulement par le bot), c'est le test le plus important. Comptez 1 h à 1
 2. Envoi sur le Workshop en **Amis uniquement** (voir `UPLOAD.md`). Notez le numéro de l'objet.
 3. Retirez votre copie locale `Kenshi\mods\KenshiMP` et abonnez-vous vous-même à l'objet : vous
    testez exactement ce que votre ami reçoit.
+4. Avant le rendez-vous, testez seul le rôle de **client** : `tests\test_client.bat record` puis
+   `tests\test_client.bat` (le bot joue l'hôte). Tout ce qui casse là cassera chez votre ami.
 
 ## 1. Installation chez l'ami (chronométrez : c'est l'expérience d'un nouveau joueur)
 1. Il s'abonne, ouvre le dossier `steamapps\workshop\content\233860\<numéro>` et lance

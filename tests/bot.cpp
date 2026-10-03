@@ -150,6 +150,16 @@ static int hostReplay(const char* file, int port, int seconds, const char* mods)
     }
     fclose(f);
     printf("[host] %d recorded message(s) loaded\n", (int)recs.size());
+    // Town container test (protocol 18): real items of this game, taken from the recorded inventories.
+    std::vector<InvItem> sample;
+    for (size_t i = 0; i < recs.size() && sample.size() < 6; ++i)
+    {
+        if (recs[i].type != MSG_INVENTORY) continue;
+        ByteReader r(recs[i].body); r.u8(); r.u32(); uint16_t n = r.u16();
+        for (uint16_t k = 0; k < n && r.ok() && sample.size() < 6; ++k) { InvItem d; d.read(r); if (r.ok() && d.sanitize()) sample.push_back(d); }
+    }
+    printf("[host] %d item(s) for the town container test\n", (int)sample.size());
+    std::map<uint32_t, std::vector<InvItem> > boxes;   // container net id -> what "our" town chest holds
 
     Session s; std::string err;
     s.setModList(mods, true);
@@ -179,6 +189,42 @@ static int hostReplay(const char* file, int port, int seconds, const char* mods)
                 ByteReader r(e.body); uint32_t id = r.u32(); uint16_t n = r.u16();
                 printf("[host] bounties of %08x: %d faction(s)\n", id, (int)n);
                 for (uint16_t i = 0; i < n && r.ok(); ++i) { std::string f = r.str(); uint32_t a = r.u32(); uint32_t c = r.u32(); if (r.ok()) printf("[host]   %s: %u (crimes %x)\n", f.c_str(), a, c); }
+            }
+            else if (e.kind == NetEvent::EV_MESSAGE && e.msgType == MSG_REGROUP)
+            {
+                ByteReader r(e.body); uint8_t target = r.u8();
+                printf("[host] REGROUP: player %d moved its squad next to player %d's characters\n", (int)e.sender, (int)target);
+            }
+            else if (e.kind == NetEvent::EV_MESSAGE && e.msgType == MSG_WORLD_CONTAINER)
+            {
+                // The client opened a town container: our version of it (the sample items), as the host would.
+                ByteReader r(e.body); r.u8(); uint8_t open = r.u8(); uint32_t id = r.u32(); std::string sid = r.str();
+                float x = r.f32(), y = r.f32(), z = r.f32();
+                if (!r.ok()) continue;
+                printf("[host] TOWN CONTAINER %s %s (%08x) at (%.0f, %.0f, %.0f)\n", sid.c_str(), open ? "opened" : "closed", id, x, y, z);
+                if (!open) continue;
+                if (!boxes.count(id)) boxes[id] = sample;
+                ByteWriter w; w.u8(CONTAINER_WORLD); w.u32(id); w.u16((uint16_t)boxes[id].size());
+                for (size_t k = 0; k < boxes[id].size(); ++k) boxes[id][k].write(w);
+                s.sendTo(e.sender, MSG_INVENTORY, w.data);
+                printf("[host]   sent %d item(s): the client's copy must show exactly these\n", (int)boxes[id].size());
+            }
+            else if (e.kind == NetEvent::EV_MESSAGE && (e.msgType == MSG_ITEM_TAKE || e.msgType == MSG_ITEM_GIVE))
+            {
+                ByteReader r(e.body); r.u8(); uint8_t kind = r.u8(); uint32_t id = r.u32(); InvItem d; d.read(r);
+                if (!r.ok() || kind != CONTAINER_WORLD || !boxes.count(id)) continue;
+                std::vector<InvItem>& box = boxes[id];
+                bool take = e.msgType == MSG_ITEM_TAKE;
+                if (take)
+                {
+                    for (size_t k = 0; k < box.size(); ++k)
+                        if (box[k].sameKind(d)) { box[k].quantity -= d.quantity; if (box[k].quantity <= 0) box.erase(box.begin() + k); break; }
+                }
+                else box.push_back(d);
+                printf("[host] TOWN CONTAINER %08x: client %s %d x %s (validated, %d stack(s) left)\n", id, take ? "took" : "put", d.quantity, d.item.c_str(), (int)box.size());
+                ByteWriter w; w.u8(CONTAINER_WORLD); w.u32(id); w.u16((uint16_t)box.size());
+                for (size_t k = 0; k < box.size(); ++k) box[k].write(w);
+                s.sendTo(e.sender, MSG_INVENTORY, w.data);
             }
             else if (e.kind == NetEvent::EV_MESSAGE && e.msgType == MSG_DAMAGE)
             {
