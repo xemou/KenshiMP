@@ -3,6 +3,7 @@
 // fade after a while; opening the box shows the whole recent history again.
 // Commands:  /war, /peace, /ally <player|all>  (relation -100 / 0 / 100)   /players
 //            /goto [player]  (our selected characters travel next to that player's; default: the host)
+//            /report  (bug report folder on the desktop, see Report.cpp)
 #include <kenshi/GameWorld.h>
 #include <kenshi/Globals.h>
 #include <mygui/MyGUI.h>
@@ -188,6 +189,13 @@ namespace
             showMessage(TF("Players: %s", s.c_str()));
             return;
         }
+        if (cmd == "/report" || cmd == "/rapport")
+        {
+            std::string done = report_write();
+            showMessage(done);
+            chat_notice(done);
+            return;
+        }
         if (cmd == "/goto" || cmd == "/aller")
         {
             // No name: the host (clients), or the only other player.
@@ -216,7 +224,7 @@ namespace
             diplomacy_set(who, value);
             return;
         }
-        showMessage(T("Commands: /players, /war <player|all>, /peace <player|all>, /ally <player|all>, /goto [player]"));
+        showMessage(T("Commands: /players, /war <player|all>, /peace <player|all>, /ally <player|all>, /goto [player], /report"));
     }
 }
 

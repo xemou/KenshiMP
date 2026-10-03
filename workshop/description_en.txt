@@ -49,4 +49,4 @@ Settings are saved in %LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg.
 Free software under the GNU GPL v3 (it is built on KenshiLib, also GPL v3).
 Source code, full guide and issue tracker: [url=https://github.com/xemou/KenshiMP]github.com/xemou/KenshiMP[/url]
 
-Please report bugs on GitHub with your RE_Kenshi_log.txt and KenshiMP_loader.log (in the Kenshi folder).
+Please report bugs on GitHub: type /report in the chat (or BUG REPORT in the Multiplayer window), zip the folder it creates on your desktop and attach it.

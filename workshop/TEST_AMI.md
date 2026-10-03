@@ -54,9 +54,11 @@ Si l'invitation Steam ne marche pas : essayez par IP avec un VPN (Radmin VPN) po
 | 4 | Lui : coupe le Wi-Fi 20 s | « déconnecté », puis reconnexion automatique |
 | 5 | Vous : quittez Kenshi, relancez, réhébergez | il revient avec le même numéro (`players.cfg`) |
 
-## 5. Ce qu'il faut récupérer après la partie (les deux joueurs)
-- `RE_Kenshi_log.txt` et `KenshiMP_loader.log` (dossier de Kenshi) ;
-- `%LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg` ;
-- l'heure approximative de chaque problème, et une capture si c'est visuel.
+## 5. Ce qu'il faut récupérer (les deux joueurs)
+- **Dès qu'un problème arrive** : tapez `/rapport` dans le chat (ou F4 → RAPPORT DE BUG). Un dossier
+  `KenshiMP_report_<date>` apparaît sur le Bureau, avec les journaux, les réglages et l'état de la
+  session à ce moment-là. Notez en une phrase ce qui s'est passé.
+- À la fin de la partie, un dernier `/rapport` chacun, même si tout s'est bien passé.
+- Une capture d'écran si le problème est visuel.
 
 Si tout passe : objet en **Public** (`UPLOAD.md`), date et numéro de l'objet dans `CHANGELOG.md`.

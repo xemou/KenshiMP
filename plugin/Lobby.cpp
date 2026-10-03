@@ -60,6 +60,7 @@ namespace
 
     // Diplomacy row buttons: "KMP_Dip_<player>_<w|p|a>"; applied from lobby_tick, never from the event.
     int g_dipPlayer = -1; float g_dipValue = 0;
+    bool g_reportRequested = false;                  // BUG REPORT: written from lobby_tick, never from the event
     bool g_friendsMode = false;                      // the panel lists Steam friends (invitations)
     std::vector<unsigned long long> g_friendIds;     // row -> friend
     unsigned long long g_inviteId = 0;               // invitation to send (from lobby_tick)
@@ -83,6 +84,7 @@ namespace
             return;
         }
         if (n == "KMP_SteamFriends") { g_friendsMode = !g_friendsMode; g_dipShown.clear(); return; }
+        if (n == "KMP_Report") { g_reportRequested = true; return; }
         if (n.compare(0, 8, "KMP_Inv_") == 0)
         {
             size_t i = (size_t)atoi(n.c_str() + 8);
@@ -149,7 +151,7 @@ namespace
             MyGUI::Gui* gui = MyGUI::Gui::getInstancePtr();
             if (!gui) return false;
             const MyGUI::IntSize& view = MyGUI::RenderManager::getInstance().getViewSize();
-            const int H = 560 + DIP_ROWS * DIP_ROW_H - 40 + (steam_available() ? 40 : 0);
+            const int H = 560 + DIP_ROWS * DIP_ROW_H;   // second button row: Steam friends, bug report
             g_win = gui->createWidget<MyGUI::Window>("Kenshi_WindowCX", MyGUI::IntCoord((view.width - W) / 2, (view.height - H) / 2, W, H),
                                                      MyGUI::Align::Default, "Popup", "KenshiMP_Lobby");
             if (!g_win) return false;
@@ -173,7 +175,8 @@ namespace
             button(c, PAD + 2 * (bw + 8), y, bw, "Leave", "KMP_Leave");
             button(c, PAD + 3 * (bw + 8), y, bw, "Close", "KMP_Close");
             if (steam_available()) button(c, PAD, y + 40, 2 * bw + 8, "Steam friends", "KMP_SteamFriends");
-            if (steam_available()) y += 40;
+            button(c, PAD + 2 * (bw + 8), y + 40, 2 * bw + 8, "Bug report", "KMP_Report");
+            y += 40;
 
             g_status = c->createWidget<MyGUI::EditBox>("Kenshi_WordWrap",
                 MyGUI::IntCoord(PAD, y + 50, W - 2 * PAD - 16, 160), MyGUI::Align::Default);
@@ -616,6 +619,12 @@ void lobby_tick()
         unsigned long long who = g_inviteId; g_inviteId = 0;
         if (!g_session.active() || !g_session.isHost()) mp_start("host");   // you invite: you host
         showMessage(steam_invite(who) ? T("Steam invitation sent.") : T("Steam invitation failed."));
+    }
+    if (g_reportRequested)
+    {
+        g_reportRequested = false;
+        g_lastError = report_write();   // shown in the status box (with the folder's path)
+        g_lastStatus = 0;
     }
     if (g_dipPlayer >= 0)
     {

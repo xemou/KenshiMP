@@ -72,7 +72,11 @@ Tout peut aussi se régler à la main dans `kenshimp.cfg` :
 - **Entrée** : ouvrir le chat (Entrée pour envoyer, Échap pour annuler). Les derniers messages
   restent affichés au-dessus (le nom de chaque joueur dans sa couleur) puis s'effacent ; ouvrir le
   chat les réaffiche. Commandes : `/players` (liste), `/war <joueur|all>`, `/peace <joueur|all>`,
-  `/ally <joueur|all>`, `/goto [joueur]` (ou `/aller`) (le début du nom suffit).
+  `/ally <joueur|all>`, `/goto [joueur]` (ou `/aller`), `/rapport` (le début du nom suffit).
+- **Rapport de bug** : `/rapport` dans le chat, ou **RAPPORT DE BUG** dans la fenêtre Multijoueur,
+  crée un dossier sur votre Bureau (`KenshiMP_report_<date>`) avec les journaux, vos réglages (sans
+  le mot de passe) et un résumé de la session. Compressez-le en zip et envoyez-le avec quelques mots
+  sur ce qui s'est passé.
 - **Rejoindre les autres** : votre partie garde votre escouade là où votre sauvegarde l'a laissée.
   **ALLER** à côté d'un joueur dans la fenêtre Multijoueur (ou `/aller <joueur>`, `/aller` seul =
   l'hôte) envoie vos persos sélectionnés (tous si aucun n'est sélectionné) à côté des persos de ce

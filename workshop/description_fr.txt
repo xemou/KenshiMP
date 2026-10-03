@@ -49,4 +49,4 @@ Les réglages sont enregistrés dans %LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg
 Logiciel libre sous licence GNU GPL v3 (il repose sur KenshiLib, lui aussi sous GPL v3).
 Code source, guide complet et suivi des bugs : [url=https://github.com/xemou/KenshiMP]github.com/xemou/KenshiMP[/url]
 
-Signalez les bugs sur GitHub avec vos fichiers RE_Kenshi_log.txt et KenshiMP_loader.log (dans le dossier de Kenshi).
+Signalez les bugs sur GitHub : tapez /rapport dans le chat (ou RAPPORT DE BUG dans la fenêtre Multijoueur), compressez le dossier créé sur votre Bureau et joignez-le.

@@ -64,6 +64,10 @@ extern Config g_cfg;
 bool ready();
 
 void log(const char* fmt, ...);
+bool mp_worldLoaded();                   // a game is loaded (our squad exists)
+std::string mp_modList();                // "game <version>;mod1;mod2..." as checked at handshake
+std::string mp_configDir();              // %LOCALAPPDATA%\kenshi\KenshiMP\ (with the final backslash)
+std::string report_write();              // Report.cpp: bug report folder on the desktop, returns the text to show
 
 // Lang.cpp: the mod speaks the game's language (texts are written in English, translated here)
 void lang_init();

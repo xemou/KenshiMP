@@ -990,6 +990,14 @@ namespace
 }
 
 bool ready() { return g_ready && g_session.active(); }
+bool mp_worldLoaded() { return worldLoaded(); }
+std::string mp_modList() { return modList(); }
+std::string mp_configDir()
+{
+    std::string p = userConfigPath();
+    size_t slash = p.find_last_of("\\/");
+    return slash == std::string::npos ? std::string() : p.substr(0, slash + 1);
+}
 
 void log(const char* fmt, ...)
 {

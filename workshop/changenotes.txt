@@ -7,4 +7,6 @@ v18 - first public beta (protocol 18)
 - Player numbers kept between host restarts (same name = same number)
 - Version shown in the Multiplayer window title: everybody must have the same one
 
-Back up your saves. Bug reports: github.com/xemou/KenshiMP (attach RE_Kenshi_log.txt and KenshiMP_loader.log).
+- /report (or BUG REPORT in the Multiplayer window): logs, settings and session summary in one folder on the desktop
+
+Back up your saves. Bug reports: github.com/xemou/KenshiMP (attach the /report folder, zipped).

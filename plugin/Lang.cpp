@@ -92,8 +92,13 @@ namespace
         { " (you)", " (vous)" },
         { "No player named '%s'. Type /players.", "Aucun joueur nommé « %s ». Tapez /joueurs." },
         { "Several players match '%s', type more of the name.", "Plusieurs joueurs correspondent à « %s », tapez plus de lettres." },
-        { "Commands: /players, /war <player|all>, /peace <player|all>, /ally <player|all>, /goto [player]",
-          "Commandes : /joueurs, /guerre <joueur|tous>, /paix <joueur|tous>, /allie <joueur|tous>, /aller [joueur]" },
+        { "Commands: /players, /war <player|all>, /peace <player|all>, /ally <player|all>, /goto [player], /report",
+          "Commandes : /joueurs, /guerre <joueur|tous>, /paix <joueur|tous>, /allie <joueur|tous>, /aller [joueur], /rapport" },
+        // --- bug report (/report, BUG REPORT button)
+        { "Bug report", "Rapport de bug" },
+        { "Bug report: could not create the folder.", "Rapport de bug : impossible de créer le dossier." },
+        { "Bug report saved (%d files): %s - send this folder (zip it) with a few words about what happened.",
+          "Rapport de bug enregistré (%d fichiers) : %s - envoyez ce dossier (compressé en zip) avec quelques mots sur ce qui s'est passé." },
         // --- regroup (F4 "Go to", /goto)
         { "Go to", "Aller" },
         { "Not possible now.", "Impossible pour le moment." },

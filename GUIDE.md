@@ -65,7 +65,10 @@ Everything can also be set by hand in `kenshimp.cfg`:
 - **Enter**: open the chat (Enter to send, Esc to cancel). The latest messages stay displayed above
   (each player's name in their colour) then fade out; opening the chat shows them again.
   Commands: `/players` (list), `/war <player|all>`, `/peace <player|all>`, `/ally <player|all>`,
-  `/goto [player]` (the start of the name is enough).
+  `/goto [player]`, `/report` (the start of the name is enough).
+- **Bug report**: `/report` in the chat, or **BUG REPORT** in the multiplayer window, creates a folder
+  on your desktop (`KenshiMP_report_<date>`) with the logs, your settings (password removed) and a
+  summary of the session. Zip it and send it with a few words about what happened.
 - **Joining the others**: your game keeps your squad where your save left it. **GO TO** next to a
   player in the multiplayer window (or `/goto <player>`, `/goto` alone = the host) moves your
   selected characters (all of them if none is selected) next to that player's characters. Not
