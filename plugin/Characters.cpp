@@ -43,6 +43,7 @@
 #include <kenshi/Gear.h>
 #include <kenshi/Animation/AnimationClass.h>
 #include <kenshi/CameraClass.h>
+#include <kenshi/Enums.h>
 #include <kenshi/gui/ScreenLabel.h>
 #include <ogre/OgreCamera.h>
 #include <mygui/MyGUI.h>
@@ -56,6 +57,7 @@
 #include <map>
 #include <deque>
 #include <set>
+#include <math.h>
 #include <vector>
 
 using namespace mp;
@@ -750,7 +752,9 @@ namespace
         DWORD stuckSince;               // owner still, ghost still far: since when
         Ogre::Vector3 stuckTarget;      // last target we unstuck it to (no teleport loop on a blocked spot)
         int floorTries; int floorFor;   // floor corrections made for the owner's current floor
-        Ghost() : floorTries(0), floorFor(-1), hasPendingAppearance(false), hasPendingEquipment(false), hasLimbs(false), hasPendingStats(false), pendingHunger(-1.f), pendingRanged(-1),
+        Ogre::Vector3 knownPos;         // owner's last reported position, body or not (regroup)
+        DWORD knownAt;                  // when (0: never)
+        Ghost() : knownPos(Ogre::Vector3::ZERO), knownAt(0), floorTries(0), floorFor(-1), hasPendingAppearance(false), hasPendingEquipment(false), hasLimbs(false), hasPendingStats(false), pendingHunger(-1.f), pendingRanged(-1),
                   combatTarget(NULL), mirroredTask(-1), lastSpeed(-1), mode(MOVE), intervalMs(100),
                   lastSnapT(0), lastMoveCmd(0), lastFrame(0), hasVisual(false), visualPos(Ogre::Vector3::ZERO),
                   visualRot(Ogre::Quaternion::IDENTITY), blend(0), lastDrawn(Ogre::Vector3::ZERO),
@@ -988,6 +992,7 @@ namespace
     void spawnGhost(uint8_t owner, const EntitySpawn& sp)
     {
         Ghost& g = g_ghosts[sp.netId];
+        g.knownPos = Ogre::Vector3(sp.x, sp.y, sp.z); g.knownAt = GetTickCount();
         if (g.h.getCharacter()) return;
 
         // Player squads go to the player's mirror faction, world NPCs to their real faction
@@ -1076,6 +1081,7 @@ namespace
         std::map<uint32_t, Ghost>::iterator it = g_ghosts.find(s.netId);
         if (it == g_ghosts.end()) return;   // spawn not received yet
         Ghost& g = it->second;
+        g.knownPos = Ogre::Vector3(s.x, s.y, s.z); g.knownAt = GetTickCount();
         Character* c = g.h.getCharacter();
         if (!c) return;
         g.last = s;
@@ -1569,6 +1575,86 @@ void chars_playerGhosts(std::vector<std::pair<uint32_t, Character*> >& out)
         Character* c = it->second.h.getCharacter();
         if (c) out.push_back(std::make_pair(it->first, c));
     }
+}
+
+// Where that player's characters are, as far as we know: the most recently reported one, with
+// or without a body here (too far away to be spawned on our side).
+bool chars_playerPosition(uint8_t owner, Ogre::Vector3& out)
+{
+    DWORD best = 0;
+    for (std::map<uint32_t, Ghost>::iterator it = g_ghosts.begin(); it != g_ghosts.end(); ++it)
+    {
+        if (netIdOwner(it->first) != owner || isNpcNetId(it->first) || !it->second.knownAt) continue;
+        if (!best || (int)(it->second.knownAt - best) > 0) { best = it->second.knownAt; out = it->second.knownPos; }
+    }
+    return best != 0;
+}
+
+namespace
+{
+    bool safeRegroupable(Character* c, bool* fighting)
+    {
+        __try
+        {
+            *fighting = c->isInCombatMode(true, true);
+            return !c->isDead() && !c->medical.isUnconcious();
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+}
+
+// Regroup (F4 "Go to" / "/goto"): our selected characters (all of them if none is selected) are
+// moved next to that player's characters, in a ring around the spot. The other players are told
+// first (MSG_REGROUP) so the host does not take the jump for a speed hack. Refused while one of
+// them is fighting, for knocked-out / dead ones (they stay), and towards a player we are at war with.
+// Returns the text to show the player.
+std::string chars_regroupTo(uint8_t owner)
+{
+    if (!ready() || owner == g_session.localId()) return T("Not possible now.");
+    if (diplomacy_relation(owner) < 0) return TF("You are at war with %s.", playerName(owner).c_str());
+    Ogre::Vector3 target;
+    if (!chars_playerPosition(owner, target)) return TF("Position of %s unknown for now (try again in a few seconds).", playerName(owner).c_str());
+
+    std::vector<std::pair<uint32_t, Character*> > mine;
+    chars_localCharacters(mine);
+    std::set<Character*> selected;
+    lektor<RootObject*> sel;
+    ou->player->getAllSelectedObjects(sel, CHARACTER);
+    for (uint32_t i = 0; i < sel.size(); ++i) { hand h(sel[i]); if (Character* c = h.getCharacter()) selected.insert(c); }
+    std::vector<Character*> movers;
+    for (size_t i = 0; i < mine.size(); ++i)
+    {
+        Character* c = mine[i].second;
+        if (!c || (!selected.empty() && !selected.count(c))) continue;
+        bool fighting = false;
+        if (!safeRegroupable(c, &fighting)) continue;
+        if (fighting) return T("One of your characters is fighting.");
+        movers.push_back(c);
+    }
+    if (movers.empty()) return T("None of your characters can travel (selected, conscious, alive).");
+
+    ByteWriter w; w.u8(owner);
+    g_session.send(MSG_REGROUP, w.data);   // before the jump: same ordered connection
+    float radius = 5.f + 0.4f * (float)movers.size();
+    int moved = 0;
+    for (size_t i = 0; i < movers.size(); ++i)
+    {
+        float a = 6.2831853f * (float)i / (float)movers.size();
+        Ogre::Vector3 p(target.x + radius * cosf(a), target.y, target.z + radius * sinf(a));
+        if (safeTeleport(movers[i], &p)) ++moved;
+    }
+    log("regroup: %d of our characters moved next to %s (%.0f,%.0f,%.0f)", moved, playerName(owner).c_str(), target.x, target.y, target.z);
+    chat_notice(TF("You joined %s.", playerName(owner).c_str()));
+    return TF("%d character(s) moved next to %s.", moved, playerName(owner).c_str());
+}
+
+// Someone regrouped: its characters jump, which is expected (host: no speed-hack warning).
+void chars_onRegroup(uint8_t who, uint8_t target)
+{
+    g_moveGuard.forgetOwner(who);
+    std::string to = target == g_session.localId() ? std::string(T("you")) : playerName(target);
+    log("%s regrouped next to %s", playerName(who).c_str(), to.c_str());
+    chat_notice(TF("%s joined %s.", playerName(who).c_str(), to.c_str()));
 }
 
 Character* chars_ghostNear(uint8_t owner, const Ogre::Vector3& pos, float maxDist)

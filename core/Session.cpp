@@ -510,7 +510,7 @@ public:
         if (!isRelayed(type)) return;
 
         uint8_t sender = c->playerId;
-        if (type == MSG_DAMAGE || type == MSG_BUILDING_DAMAGE || type == MSG_ITEM_TAKE || type == MSG_ITEM_GIVE || type == MSG_GROUND_TAKE || type == MSG_TRADE || type == MSG_ITEM_UNDO || type == MSG_ZONE_MODE || type == MSG_WORLD_STATE_REPORT || type == MSG_WORLD_BUILDING_REPORT || type == MSG_BOUNTY_CRIME)
+        if (type == MSG_DAMAGE || type == MSG_BUILDING_DAMAGE || type == MSG_ITEM_TAKE || type == MSG_ITEM_GIVE || type == MSG_GROUND_TAKE || type == MSG_TRADE || type == MSG_ITEM_UNDO || type == MSG_ZONE_MODE || type == MSG_WORLD_STATE_REPORT || type == MSG_WORLD_BUILDING_REPORT || type == MSG_BOUNTY_CRIME || type == MSG_WORLD_CONTAINER)
         {
             if (body.empty()) return;
             uint8_t target = body[0];
@@ -674,6 +674,20 @@ void Session::send(uint8_t msgType, const Bytes& body)
     if (!impl_->running) return;
     Outgoing o; o.target = BROADCAST; o.type = msgType; o.body = body;
     Lock l(impl_->cs); impl_->outbox.push_back(o);
+}
+
+void Session::setKnownSlots(const std::map<std::string, uint8_t>& slots)
+{
+    Lock l(impl_->cs);
+    for (std::map<std::string, uint8_t>::const_iterator it = slots.begin(); it != slots.end(); ++it)
+        if (it->second > 0 && it->second < MAX_PLAYERS && !it->first.empty() && !impl_->knownIds.count(it->first))
+            impl_->knownIds[it->first] = it->second;
+}
+
+std::map<std::string, uint8_t> Session::knownSlots() const
+{
+    Lock l(impl_->cs);
+    return impl_->knownIds;
 }
 
 void Session::sendTo(uint8_t player, uint8_t msgType, const Bytes& body)

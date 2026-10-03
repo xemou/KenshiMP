@@ -220,6 +220,9 @@ void weather_onMessage(const NetEvent& e)
     }
 }
 
+// Host: the weather goes out at the next tick, even if it did not change (a player joined / reloaded).
+void weather_sendNow() { g_lastHash = 0; g_lastSend = 0; }
+
 void weather_onWorldReload()
 {
     { Lock l; g_heldUntil.clear(); }

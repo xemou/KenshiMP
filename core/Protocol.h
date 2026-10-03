@@ -16,7 +16,7 @@
 
 namespace mp {
 
-const uint32_t PROTOCOL_VERSION = 17;
+const uint32_t PROTOCOL_VERSION = 18;
 
 // World NPCs replicated by the host use the upper half of the host's local id space.
 const uint32_t NPC_ID_FLAG = 0x800000;
@@ -69,7 +69,11 @@ enum MsgType
     MSG_WORLD_BUILDINGS,  // h->c u16 n, WorldBuildingState* : town buildings broken / repaired / destroyed in the host's world
     MSG_WORLD_BUILDING_REPORT, // c->h u8 HOST_ID, u8 kind: 0 = hit (WorldBuildingState with no doors, BuildingDamageMsg), 1 = u16 n, WorldBuildingState* (client's own world)
     MSG_BOUNTIES,         // u32 charNetId, u16 n, {str factionSid, u32 amount, u32 crimeBits}* : the owner's bounties on that character (on change)
-    MSG_BOUNTY_CRIME      // h->owner u8 targetPlayer, u16 n, {u32 charNetId, str factionSid, u32 addedAmount, u32 newCrimeBits}* : crimes the host's NPCs saw
+    MSG_BOUNTY_CRIME,     // h->owner u8 targetPlayer, u16 n, {u32 charNetId, str factionSid, u32 addedAmount, u32 newCrimeBits}* : crimes the host's NPCs saw
+    MSG_WORLD_CONTAINER,  // c->h u8 HOST_ID, u8 open (1 opened, 0 closed), u32 containerNetId, str buildingSid, f32 x, y, z :
+                          //      the client opened a town container (chest, shop storage...): the host sends its content
+                          //      (MSG_INVENTORY, kind CONTAINER_WORLD) while it stays open, transfers go to the host
+    MSG_REGROUP           // u8 targetPlayer : the sender's squad was moved next to that player's characters (F4 / "/goto")
 };
 
 inline bool isRelayed(uint8_t t) { return t >= MSG_ENTITY_STATE; }
@@ -304,7 +308,9 @@ struct ItemRef
 
 // Container kinds of MSG_INVENTORY / MSG_ITEM_*.
 enum { CONTAINER_CHARACTER = 0, CONTAINER_BUILDING = 1, CONTAINER_BACKPACK = 2,   // BACKPACK: id = the wearer's net id
-       CONTAINER_GROUND = 3 };                                                     // MSG_ITEM_UNDO only: id = ground item
+       CONTAINER_GROUND = 3,                                                       // MSG_ITEM_UNDO only: id = ground item
+       CONTAINER_WORLD = 4 };                                                      // town container of the host's world: id = host-owned
+                                                                                   // (top byte 0, NPC bit clear), chosen by the client
 // MSG_ITEM_UNDO actions: what the requester must do to its own characters.
 enum { UNDO_REMOVE = 0,     // it took something the owner did not give up: remove it again
        UNDO_GIVE_BACK = 1 };  // it put something the owner did not accept: give it back

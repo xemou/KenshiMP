@@ -13,6 +13,11 @@
 // auto-trade, trade screen...): each remote container keeps a snapshot of its content; while its
 // window is open on our screen, any difference is a transfer made by the player and is forwarded.
 // Our own changes (mirror, re-dress, despawn) only refresh the snapshot.
+// Town containers (chests, shop storage... of the host's world, CONTAINER_WORLD): a client in the
+// host's world has its own copy of them from its save. When it opens one, it tells the host
+// (MSG_WORLD_CONTAINER), its copy is emptied and then mirrors the host's content for as long as
+// the window stays open; what the player takes or puts goes to the host like any transfer. So a
+// town chest holds the same things for everybody and an item looted by one player is gone for all.
 #include <kenshi/GameWorld.h>
 #include <kenshi/Globals.h>
 #include <kenshi/Character.h>
@@ -24,6 +29,8 @@
 #include <kenshi/Platoon.h>
 #include <kenshi/Item.h>
 #include <kenshi/Building/Building.h>
+#include <kenshi/PlayerInterface.h>
+#include <kenshi/Enums.h>
 #include <kenshi/util/hand.h>
 #include <core/Functions.h>
 
@@ -33,6 +40,8 @@
 
 #include <algorithm>
 #include <map>
+#include <math.h>
+#include <stdio.h>
 #include <set>
 #include <vector>
 
@@ -165,8 +174,52 @@ namespace
         Character* c = chars_byNetId(id);
         return c ? safeWornBag(c) : NULL;
     }
+    // ------------------------------------------------------------------ town containers
+    struct WorldBox
+    {
+        std::string sid; float x, y, z;   // the building (furniture) as both worlds know it
+        hand h;                           // our copy, once found
+        std::set<uint8_t> watchers;       // host: clients with its window open
+        uint32_t sentHash;                // host: content last sent to them
+        bool open;                        // client: its window is open on our screen
+        WorldBox() : x(0), y(0), z(0), sentHash(0), open(false) {}
+    };
+    std::map<uint32_t, WorldBox> g_boxes;
+    const size_t MAX_BOXES = 2048;
+
+    // A container of the world (not a player's building, not a ghost), and its inventory.
+    Inventory* safeBoxInventory(Building* b, Faction* mine)
+    {
+        __try
+        {
+            if (!b->data || (mine && b->owner == mine)) return NULL;
+            return b->getInventory();
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return NULL; }
+    }
+    Inventory* worldInventory(Building* b)
+    {
+        if (!b || builds_netIdOf(b)) return NULL;
+        return safeBoxInventory(b, ou && ou->player ? ou->player->getFaction() : NULL);
+    }
+    Building* boxBuilding(WorldBox& w)
+    {
+        Building* b = w.h.getBuilding();
+        if (!b && !w.sid.empty())
+        {
+            b = builds_findWorld(w.sid, w.x, w.y, w.z);
+            if (b) w.h = hand(b);
+        }
+        return b;
+    }
+
     Inventory* inventoryOf(uint8_t kind, uint32_t id)
     {
+        if (kind == CONTAINER_WORLD)
+        {
+            std::map<uint32_t, WorldBox>::iterator w = g_boxes.find(id);
+            return w == g_boxes.end() ? NULL : worldInventory(boxBuilding(w->second));
+        }
         if (kind == CONTAINER_BACKPACK) { Character* c = chars_byNetId(id); return c ? safeBackpack(c) : NULL; }
         if (kind == CONTAINER_CHARACTER) { Character* c = chars_byNetId(id); return c ? c->inventory : NULL; }
         if (kind == CONTAINER_BUILDING) { Building* b = builds_byNetId(id); return b ? b->getInventory() : NULL; }
@@ -176,6 +229,11 @@ namespace
     {
         if (kind == CONTAINER_CHARACTER || kind == CONTAINER_BACKPACK) { Character* c = chars_byNetId(id); if (c) { out = c->getPosition(); return true; } }
         if (kind == CONTAINER_BUILDING) { Building* b = builds_byNetId(id); if (b) { out = b->getPosition(); return true; } }
+        if (kind == CONTAINER_WORLD)
+        {
+            std::map<uint32_t, WorldBox>::iterator w = g_boxes.find(id);
+            if (w != g_boxes.end()) { out = Ogre::Vector3(w->second.x, w->second.y, w->second.z); return true; }
+        }
         return false;
     }
     void forward(uint8_t type, uint8_t kind, uint32_t id, const InvItem& d)
@@ -651,8 +709,154 @@ namespace
 
 void items_sendUndo(uint8_t to, uint8_t action, uint8_t kind, uint32_t id, const InvItem& d) { sendUndo(to, action, kind, id, d); }
 
+// ---------------------------------------------------------------------- town containers
+namespace
+{
+    const DWORD BOX_SCAN_MS = 300, BOX_PUSH_MS = 500;
+    const float BOX_SCAN_RADIUS = 40.f;     // around our characters: the container whose window is open
+    DWORD g_lastBoxScan = 0, g_lastBoxPush = 0;
+
+    bool sharedWorldClient() { return g_cfg.townSync && ready() && !g_session.isHost() && !npcs_ownWorld(); }
+
+    bool safeBoxPosition(Building* b, Ogre::Vector3* at)
+    {
+        __try { if (!b->data) return false; *at = b->getPosition(); return true; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    // The id a client gives a town container: host-owned net id (top byte 0, NPC bit clear),
+    // from its type and position. The host keeps whatever id the client chose for that building.
+    uint32_t boxId(const std::string& sid, const Ogre::Vector3& at)
+    {
+        char buf[64];
+        sprintf_s(buf, "@%d,%d,%d", (int)floorf(at.x + 0.5f), (int)floorf(at.y + 0.5f), (int)floorf(at.z + 0.5f));
+        std::string k = sid + buf;
+        uint32_t h = hashBytes(Bytes(k.begin(), k.end())) & 0x7FFFFF;
+        return makeNetId(HOST_ID, h ? h : 1);
+    }
+
+    void sendBoxEvent(uint32_t id, const WorldBox& w, bool open)
+    {
+        ByteWriter m; m.u8(HOST_ID); m.u8(open ? 1 : 0); m.u32(id); m.str(w.sid); m.f32(w.x); m.f32(w.y); m.f32(w.z);
+        g_session.sendTo(HOST_ID, MSG_WORLD_CONTAINER, m.data);
+    }
+
+    // Client: which town container windows are open on our screen (opened / closed since last time).
+    void scanBoxes()
+    {
+        std::vector<std::pair<uint32_t, Character*> > mine;
+        chars_localCharacters(mine);
+        std::set<uint32_t> openNow;
+        std::vector<Ogre::Vector3> done;
+        for (size_t i = 0; i < mine.size(); ++i)
+        {
+            if (!mine[i].second) continue;
+            Ogre::Vector3 p = mine[i].second->getPosition();
+            bool covered = false;   // (not "near": a Windows macro)
+            for (size_t k = 0; k < done.size() && !covered; ++k) covered = done[k].squaredDistance(p) < 20.f * 20.f;
+            if (covered) continue;
+            done.push_back(p);
+            lektor<RootObject*> list;
+            ou->getObjectsWithinSphere(list, p, BOX_SCAN_RADIUS, BUILDING, 64, NULL);
+            for (uint32_t k = 0; k < list.size(); ++k)
+            {
+                Building* b = static_cast<Building*>(list[k]);
+                Inventory* inv = worldInventory(b);
+                if (!inv || !safeVisible(inv)) continue;
+                Ogre::Vector3 at;
+                if (!safeBoxPosition(b, &at)) continue;
+                std::string sid = b->data->stringID;
+                uint32_t id = boxId(sid, at);
+                openNow.insert(id);
+                if (!g_boxes.count(id) && g_boxes.size() >= MAX_BOXES) continue;
+                WorldBox& w = g_boxes[id];
+                if (w.open) continue;
+                w.sid = sid; w.x = at.x; w.y = at.y; w.z = at.z; w.h = hand(b); w.open = true;
+                // Our copy (from our save) is not the town's: emptied until the host's content
+                // arrives, and not taken for a transfer of the player (no reference until then).
+                uint64_t k2 = key(CONTAINER_WORLD, id);
+                g_baseline.erase(k2); g_open.erase(k2); g_appliedHash.erase(k2);
+                Pending blank; blank.kind = CONTAINER_WORLD; blank.id = id; blank.since = GetTickCount();
+                applyMirror(blank);
+                sendBoxEvent(id, w, true);
+                log("town container %s opened: asking the host for its content (%08x)", sid.c_str(), id);
+            }
+        }
+        for (std::map<uint32_t, WorldBox>::iterator it = g_boxes.begin(); it != g_boxes.end(); ++it)
+            if (it->second.open && !openNow.count(it->first))
+            {
+                it->second.open = false;
+                sendBoxEvent(it->first, it->second, false);
+            }
+    }
+
+    // Host: content of a container to the clients that have it open (on change, or to one now).
+    void pushBox(uint32_t id, WorldBox& w, int onlyTo)
+    {
+        Inventory* inv = worldInventory(boxBuilding(w));
+        if (!inv) return;
+        Bytes body = items_inventoryMsg(CONTAINER_WORLD, id, inv);
+        uint32_t h = hashBytes(body);
+        if (onlyTo >= 0) { g_session.sendTo((uint8_t)onlyTo, MSG_INVENTORY, body); return; }
+        if (h == w.sentHash) return;
+        w.sentHash = h;
+        for (std::set<uint8_t>::iterator p = w.watchers.begin(); p != w.watchers.end(); ++p) g_session.sendTo(*p, MSG_INVENTORY, body);
+    }
+
+    // Host: a client opened / closed one.
+    void onBoxEvent(const NetEvent& e)
+    {
+        if (!g_session.isHost()) return;
+        ByteReader r(e.body);
+        uint8_t target = r.u8(), open = r.u8();
+        uint32_t id = r.u32();
+        std::string sid = r.str();
+        float x = r.f32(), y = r.f32(), z = r.f32();
+        if (!r.ok() || target != HOST_ID || netIdOwner(id) != HOST_ID || (id & NPC_ID_FLAG) || !validPos(x, y, z) || sid.empty()) return;
+        if (!open)
+        {
+            std::map<uint32_t, WorldBox>::iterator it = g_boxes.find(id);
+            if (it != g_boxes.end()) it->second.watchers.erase(e.sender);
+            return;
+        }
+        if (npcs_clientOwnWorld(e.sender)) return;   // its own world: its containers are its own
+        std::map<uint32_t, WorldBox>::iterator it = g_boxes.find(id);
+        if (it == g_boxes.end())
+        {
+            if (g_boxes.size() >= MAX_BOXES) return;
+            it = g_boxes.insert(std::make_pair(id, WorldBox())).first;
+            it->second.sid = sid; it->second.x = x; it->second.y = y; it->second.z = z;
+        }
+        WorldBox& w = it->second;
+        if (w.sid != sid || Ogre::Vector3(w.x, w.y, w.z).distance(Ogre::Vector3(x, y, z)) > 3.f)
+        {
+            log("town container %08x from %s: id already used by another container here, ignored", id, playerName(e.sender).c_str());
+            return;
+        }
+        if (!worldInventory(boxBuilding(w)))
+        {
+            log("town container %s opened by %s: not loaded here", sid.c_str(), playerName(e.sender).c_str());
+            return;
+        }
+        w.watchers.insert(e.sender);
+        pushBox(id, w, e.sender);
+        log("town container %s opened by %s: content sent", sid.c_str(), playerName(e.sender).c_str());
+    }
+}
+
+// That player reloaded its world / left. Host: the town containers it had open are closed.
+// Client, about the host: it forgot who watches what, open windows are asked for again.
+void items_worldForget(uint8_t player)
+{
+    for (std::map<uint32_t, WorldBox>::iterator it = g_boxes.begin(); it != g_boxes.end(); ++it)
+    {
+        it->second.watchers.erase(player);
+        if (player == HOST_ID && !g_session.isHost()) it->second.open = false;
+    }
+}
+
 void items_onMessage(const NetEvent& e)
 {
+    if (e.msgType == MSG_WORLD_CONTAINER) { onBoxEvent(e); return; }
     ByteReader r(e.body);
     if (e.msgType == MSG_INVENTORY)
     {
@@ -693,7 +897,7 @@ void items_onMessage(const NetEvent& e)
         uint32_t id = r.u32();
         InvItem d; d.read(r);
         if (!r.ok() || target != g_session.localId() || netIdOwner(id) != e.sender || !d.sanitize()) return;
-        if (action > UNDO_GIVE_BACK || kind > CONTAINER_GROUND) return;
+        if (action > UNDO_GIVE_BACK || kind > CONTAINER_WORLD) return;
         if (d.item == MONEY_ITEM) { if (kind == CONTAINER_CHARACTER) undoMoneyHere(e.sender, action, id, d.quantity); return; }
         applyUndo(e.sender, action, kind, id, d);
         return;
@@ -719,10 +923,19 @@ void items_tick(DWORD now)
     }
     static DWORD lastDetect = 0;
     if (now - lastDetect >= 100) { lastDetect = now; detectTransfers(); }
+    if (sharedWorldClient() && now - g_lastBoxScan >= BOX_SCAN_MS) { g_lastBoxScan = now; scanBoxes(); }
+    if (g_session.isHost() && now - g_lastBoxPush >= BOX_PUSH_MS)
+    {
+        g_lastBoxPush = now;
+        for (std::map<uint32_t, WorldBox>::iterator it = g_boxes.begin(); it != g_boxes.end(); ++it)
+            if (!it->second.watchers.empty()) pushBox(it->first, it->second, -1);
+    }
 }
 
 void items_onPlayerLeft(uint8_t id)
 {
+    items_worldForget(id);
+    if (id == HOST_ID && !g_session.isHost()) g_boxes.clear();   // the host's town containers: ours again
     for (std::map<uint64_t, Pending>::iterator it = g_pending.begin(); it != g_pending.end();)
         if (netIdOwner(it->second.id) == id) g_pending.erase(it++); else ++it;
     for (std::map<uint64_t, uint32_t>::iterator it = g_appliedHash.begin(); it != g_appliedHash.end();)
@@ -770,6 +983,7 @@ void items_onDespawn(uint32_t id)
 
 void items_onWorldReload()
 {
+    g_boxes.clear();
     g_announcedMoney.clear();
     g_moneyBase.clear();
     g_lastMirror.clear();

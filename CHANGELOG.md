@@ -15,7 +15,12 @@ Summary of what the first public build contains (fill in the final protocol numb
 - Damage authority model (attacker computes, victim's owner applies)
 - Shared host world: NPCs and animals around each player, clock, host-controlled pause, weather,
   world states of unique NPCs and the town changes they cause, town doors broken and town buildings
-  destroyed by any player (`town_sync`), bounties for crimes seen in the host's world (protocol 17)
+  destroyed by any player (`town_sync`), bounties for crimes seen in the host's world (protocol 17),
+  town containers with the host's content for everybody (protocol 18)
+- Joining a running game (protocol 18): GO TO in the multiplayer window / `/goto` moves your squad next
+  to another player's characters (reminder when a client arrives far from the host); the host sends its
+  clock and weather at once to a player who joins or reloads; player numbers kept between host restarts
+  (`players.cfg`)
 - Buildings and towns replicated both ways
 - Items: bodies, chests, worn backpacks, ground items, traders' stock and money, direct trade between players
 - Multiplayer window (title screen / pause menu / F4), chat, players on the world map, English + French

@@ -64,11 +64,19 @@ Everything can also be set by hand in `kenshimp.cfg`:
   otherwise with all players.
 - **Enter**: open the chat (Enter to send, Esc to cancel). The latest messages stay displayed above
   (each player's name in their colour) then fade out; opening the chat shows them again.
-  Commands: `/players` (list), `/war <player|all>`, `/peace <player|all>`, `/ally <player|all>`
-  (the start of the name is enough).
+  Commands: `/players` (list), `/war <player|all>`, `/peace <player|all>`, `/ally <player|all>`,
+  `/goto [player]` (the start of the name is enough).
+- **Joining the others**: your game keeps your squad where your save left it. **GO TO** next to a
+  player in the multiplayer window (or `/goto <player>`, `/goto` alone = the host) moves your
+  selected characters (all of them if none is selected) next to that player's characters. Not
+  while one of them is fighting, nor towards a player you are at war with; knocked-out characters
+  stay. A client that arrives far from the host is reminded of it about 20 s after loading.
 - **Items**: you can loot the body (KO/dead) of another player or an NPC, trade with the host's
   merchants and put in / take from other players' chests. The owner validates (item still there,
   taker within 30 units) and the item only ever exists once.
+- **Town containers** (chests, storage of the world): in the host's world they hold the host's
+  content for everybody. When a client opens one, its own copy is replaced by the host's, and what
+  it takes or puts goes through the host: an item looted by one player is gone for all.
 - You cannot carry or cage another player's character (looting them while KO is allowed; in
   towns, guards see it as theft unless you are at war with them); carrying a world NPC makes it
   yours (the host hands it over to you).
@@ -76,6 +84,10 @@ Everything can also be set by hand in `kenshimp.cfg`:
 - Speed is locked to x1. Only the host can pause (for everyone).
 - **Client saves**: they go to `<name>_MP`; your solo game is untouched. The host saves normally:
   their save holds the shared world.
+- **Player numbers**: each player gets a number from the host (it names their faction and
+  characters in the host's save). The host remembers them in `players.cfg` (next to
+  `kenshimp.cfg`): a friend coming back, even after the host restarted Kenshi, gets the same number
+  as long as they use the same **Name**.
 
 ## 4. `kenshimp.cfg` options
 | Option | Default | Purpose |

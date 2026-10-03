@@ -12,6 +12,7 @@
 //    refuses mismatches (or only warns, see setModList).
 #pragma once
 #include "Protocol.h"
+#include <map>
 
 namespace mp {
 
@@ -92,6 +93,11 @@ public:
     // Send to one player (DAMAGE-style targeted messages). Body layout is up to the caller;
     // for MSG_DAMAGE / MSG_BUILDING_DAMAGE the first byte must already be the target player id.
     void sendTo(uint8_t player, uint8_t msgType, const Bytes& body);
+
+    // Host: name -> player number of everybody who joined (returning players get their number
+    // back). Kept by the plugin across sessions, given back before host() or right after it.
+    void setKnownSlots(const std::map<std::string, uint8_t>& slots);
+    std::map<std::string, uint8_t> knownSlots() const;
 
 private:
     Session(const Session&);

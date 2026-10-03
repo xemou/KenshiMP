@@ -40,7 +40,7 @@ Legend: ✅ handled (and how it is verified) · 🧪 coded and tested offline, *
 ## 3. World consistency
 | # | Problem | Status | Safeguard |
 |---|---|---|---|
-| 27 | Everyone has their own save, worlds diverge | 🟡 | Host's world shared (NPCs, clock, weather, world states, town versions, broken town doors and destroyed town buildings - 🧪 `town_sync`); advice: clients on a fresh/dedicated game. A town changed in a client's own save but not in the host's world stays changed on that client (towns are never reverted, as in the base game). A client saving while connected keeps the host's world states in its save. |
+| 27 | Everyone has their own save, worlds diverge | 🟡 | Host's world shared (NPCs, clock, weather, world states, town versions, broken town doors and destroyed town buildings - 🧪 `town_sync`; 🧪 town containers: a client's copy is replaced by the host's content when opened, transfers go through the host, protocol 18); advice: clients on a fresh/dedicated game. A town changed in a client's own save but not in the host's world stays changed on that client (towns are never reverted, as in the base game). A client saving while connected keeps the host's world states in its save. |
 | 28 | Client damages their solo save | ✅ | Client saves redirected to `<name>_MP`. |
 | 29 | Ghosts stored in a save | ✅ | Purged on every load. |
 | 30 | Host reloads another save mid-session | ✅ | Detection, caches invalidated, purge, resync. Seen in game: loading a save with a player connected, no crash, ghost recreated. |
@@ -60,9 +60,6 @@ Legend: ✅ handled (and how it is verified) · 🧪 coded and tested offline, *
 | 43 | Production, farms, research | 🟡 | Simulated on the owner's side only (others see the buildings). |
 | 44 | Overlapping constructions from two players | 🧪 | Plan refused and removed if within 3 units of another player's building (message). |
 | 45 | Building interiors / floors | 🧪 | Floor sent with the position; teleport onto the right floor. |
-| 46 | Severed limbs, robotic limbs, states (drunkenness, hunger) | ✅ | Seen in game: left arm severed on the owner → severed on their ghost. Prosthetics: seen in game. Hunger: sent with the stats and applied to the ghost (seen in the log). Kenshi has no drunkenness. |
-| 47 | A client's captives removed by the disabling of local NPCs | 🧪 | Cleanup skips carried characters, slaves, and NPCs taken by the client. |
-| 48 | Relations with world factions | ✅ | Table synced to the mirror faction. |
 | 49 | Name of a reused player slot | ✅ | Mirror faction renamed. |
 | 50 | Dialogues with a ghost NPC | 🟡 | Played locally; recruitment = ownership transfer. |
 | 51 | Bounties / crimes | 🧪 | Crimes seen by the host's NPCs are added to the real character's bounty (`MSG_BOUNTY_CRIME`); each player's bounty table is copied onto its characters in the other worlds (`MSG_BOUNTIES`). Faction relation drops caused by a crime stay in the world where it was seen. |
@@ -95,6 +92,12 @@ Legend: ✅ handled (and how it is verified) · 🧪 coded and tested offline, *
 | 71 | The mod feels "modded" (English texts, separate windows) | ✅ | Texts in the game's language (seen in game: window in French), coloured chat history (seen in game), name/faction pre-filled (seen in game), MULTIPLAYER button under the title menu and the pause menu (🧪 pause menu). |
 | 72 | You can't see where the other players are | ✅ | Their squads are added to the game's world map (same markers as squads), except at war (fog). Option `show_players_on_map`. Verified in game: shown, hidden on war declaration, shown again at peace. |
 | 68 | Distributing the same version to everyone | 🟡 | Checked on connect; distribute the zipped `dist\KenshiMP` folder. |
+| 46 | Severed limbs, robotic limbs, states (drunkenness, hunger) | ✅ | Seen in game: left arm severed on the owner → severed on their ghost. Prosthetics: seen in game. Hunger: sent with the stats and applied to the ghost (seen in the log). Kenshi has no drunkenness. |
+| 47 | A client's captives removed by the disabling of local NPCs | 🧪 | Cleanup skips carried characters, slaves, and NPCs taken by the client. |
+| 48 | Relations with world factions | ✅ | Table synced to the mirror faction. |
+| 73 | Joining a running game far from the other players | 🧪 | Protocol 18: GO TO (multiplayer window) / `/goto` teleports the selected characters next to another player's last known position (refused in combat or at war; announced first so the host's speed check does not warn). Reminder to a client loaded more than 1500 units from the host. |
+| 74 | Clock / weather wrong for a few seconds after joining | 🧪 | The host sends both at once when someone joins or reloads (was: up to 5 s). |
+| 75 | Player number changing when the host restarts | 🧪 | `players.cfg` on the host keeps name -> number between sessions (tested offline: returning player gets its number back after a host restart). |
 
 ## Suggested priorities for what comes next
 1. Validate the 🧪 additions in game: ground items, merchant money, speed alert (the bot can drop

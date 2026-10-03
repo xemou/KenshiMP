@@ -2,6 +2,7 @@
 // Enter sends, Escape cancels. The last lines stay above it (player names in their colour) and
 // fade after a while; opening the box shows the whole recent history again.
 // Commands:  /war, /peace, /ally <player|all>  (relation -100 / 0 / 100)   /players
+//            /goto [player]  (our selected characters travel next to that player's; default: the host)
 #include <kenshi/GameWorld.h>
 #include <kenshi/Globals.h>
 #include <mygui/MyGUI.h>
@@ -187,6 +188,22 @@ namespace
             showMessage(TF("Players: %s", s.c_str()));
             return;
         }
+        if (cmd == "/goto" || cmd == "/aller")
+        {
+            // No name: the host (clients), or the only other player.
+            int who = findPlayer(arg);
+            if (arg.empty() && !g_session.isHost()) who = HOST_ID;
+            else if (arg.empty())
+            {
+                const std::vector<PlayerInfo>& ps = g_session.players();
+                who = -2;
+                for (size_t i = 0; i < ps.size(); ++i) if (ps[i].id != g_session.localId()) who = (who == -2) ? ps[i].id : -3;
+            }
+            if (who == -2) { showMessage(TF("No player named '%s'. Type /players.", arg.c_str())); return; }
+            if (who < 0) { showMessage(T("Type the name of the player to join: /goto <player>.")); return; }
+            showMessage(chars_regroupTo((uint8_t)who));
+            return;
+        }
         float value = 1.0e9f;
         if (cmd == "/war" || cmd == "/guerre") value = -100.f;
         else if (cmd == "/peace" || cmd == "/paix") value = 0.f;
@@ -199,7 +216,7 @@ namespace
             diplomacy_set(who, value);
             return;
         }
-        showMessage(T("Commands: /players, /war <player|all>, /peace <player|all>, /ally <player|all>"));
+        showMessage(T("Commands: /players, /war <player|all>, /peace <player|all>, /ally <player|all>, /goto [player]"));
     }
 }
 

@@ -72,10 +72,20 @@ Tout peut aussi se régler à la main dans `kenshimp.cfg` :
 - **Entrée** : ouvrir le chat (Entrée pour envoyer, Échap pour annuler). Les derniers messages
   restent affichés au-dessus (le nom de chaque joueur dans sa couleur) puis s'effacent ; ouvrir le
   chat les réaffiche. Commandes : `/players` (liste), `/war <joueur|all>`, `/peace <joueur|all>`,
-  `/ally <joueur|all>` (le début du nom suffit).
+  `/ally <joueur|all>`, `/goto [joueur]` (ou `/aller`) (le début du nom suffit).
+- **Rejoindre les autres** : votre partie garde votre escouade là où votre sauvegarde l'a laissée.
+  **ALLER** à côté d'un joueur dans la fenêtre Multijoueur (ou `/aller <joueur>`, `/aller` seul =
+  l'hôte) envoie vos persos sélectionnés (tous si aucun n'est sélectionné) à côté des persos de ce
+  joueur. Impossible pendant qu'un d'eux se bat ou vers un joueur avec qui vous êtes en guerre ; les
+  persos KO restent sur place. Un client qui arrive loin de l'hôte reçoit un rappel ~20 s après le
+  chargement.
 - **Objets** : vous pouvez fouiller le corps (KO/mort) d'un autre joueur ou d'un PNJ, commercer avec
   les marchands de l'hôte et déposer / prendre dans les coffres des autres joueurs. Le propriétaire
   valide (objet toujours là, preneur à moins de 30 unités) et l'objet n'existe jamais en double.
+- **Coffres des villes** (coffres, rangements du monde) : dans le monde de l'hôte, ils ont le même
+  contenu pour tout le monde, celui de l'hôte. Quand un client en ouvre un, sa copie est remplacée par
+  celle de l'hôte, et ce qu'il prend ou dépose passe par l'hôte : un objet pris par un joueur
+  disparaît pour tous.
 - Vous ne pouvez pas porter ni mettre en cage le perso d'un autre joueur (le fouiller quand il est
   KO est permis ; en ville, les gardes y voient un vol sauf si vous êtes en guerre avec lui) ;
   porter un PNJ du monde le rend vôtre (l'hôte vous le cède).
@@ -83,6 +93,10 @@ Tout peut aussi se régler à la main dans `kenshimp.cfg` :
 - La vitesse est bloquée à x1. Seul l'hôte peut mettre en pause (pour tout le monde).
 - **Sauvegardes des clients** : elles vont dans `<nom>_MP` ; votre partie solo n'est pas touchée.
   L'hôte sauvegarde normalement : sa sauvegarde contient le monde partagé.
+- **Numéros de joueur** : l'hôte donne un numéro à chaque joueur (il nomme sa faction et ses persos
+  dans la sauvegarde de l'hôte). L'hôte les retient dans `players.cfg` (à côté de `kenshimp.cfg`) :
+  un ami qui revient, même après un redémarrage de Kenshi chez l'hôte, retrouve le même numéro s'il
+  garde le même **Nom**.
 
 ## 4. Options de `kenshimp.cfg`
 | Option | Défaut | Rôle |

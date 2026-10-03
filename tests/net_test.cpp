@@ -276,6 +276,38 @@ static void passwordAndIdentityTests()
     printf("  password + stable slot: Bob back in slot %d, Carol in %d\n", (int)bob2.localId(), (int)carol.localId());
 }
 
+// The host restarts (new Session): the numbers it saved (players.cfg) are given back, so a returning
+// player gets its old number even if someone else connects first.
+static void savedSlotsTests()
+{
+    std::string err;
+    NetEvent e;
+    std::map<std::string, uint8_t> saved;
+    {
+        Session host;
+        CHECK(host.host(47140, "H", "HF", err));
+        Session a, b;
+        CHECK(a.join("127.0.0.1", 47140, "Ann", "AF", err));
+        CHECK(waitEvent(a, NetEvent::EV_CONNECTED, e));
+        CHECK(b.join("127.0.0.1", 47140, "Ben", "BF", err));
+        CHECK(waitEvent(b, NetEvent::EV_CONNECTED, e));
+        CHECK(a.localId() == 1 && b.localId() == 2);
+        saved = host.knownSlots();
+        CHECK(saved.size() == 2 && saved["Ben"] == 2);
+    }
+    Session host;
+    host.setKnownSlots(saved);
+    CHECK(host.host(47141, "H", "HF", err));
+    Session newcomer, ben;
+    CHECK(newcomer.join("127.0.0.1", 47141, "Cid", "CF", err));
+    CHECK(waitEvent(newcomer, NetEvent::EV_CONNECTED, e));
+    CHECK(ben.join("127.0.0.1", 47141, "Ben", "BF", err));
+    CHECK(waitEvent(ben, NetEvent::EV_CONNECTED, e));
+    CHECK(ben.localId() == 2);                                // Ben's number survived the restart
+    CHECK(newcomer.localId() != 1 && newcomer.localId() != 2); // free slots first, Ann's kept for her
+    printf("  saved slots after a host restart: Ben back in slot %d, newcomer in %d\n", (int)ben.localId(), (int)newcomer.localId());
+}
+
 static void misbehavingPeerTests()
 {
     std::string err;
@@ -697,6 +729,7 @@ int main()
     sanitizeTests();
     modListTests();
     passwordAndIdentityTests();
+    savedSlotsTests();
     misbehavingPeerTests();
     serialisationTests();
 

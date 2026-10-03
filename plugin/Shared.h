@@ -115,6 +115,9 @@ Character* chars_nextGhost(Character* after);
 std::string chars_debugShoot(Character* me);   // test: our character fires at a ghost   // cycles through the ghosts (debug camera)
 void chars_localCharacters(std::vector<std::pair<uint32_t, Character*> >& out);   // our replicated squad
 void chars_playerGhosts(std::vector<std::pair<uint32_t, Character*> >& out);      // other players' characters here
+bool chars_playerPosition(uint8_t owner, Ogre::Vector3& out);   // last known position of one of its characters
+std::string chars_regroupTo(uint8_t owner);   // move our selected characters next to that player's (text to show)
+void chars_onRegroup(uint8_t who, uint8_t target);   // MSG_REGROUP received
 Character* chars_ghostNear(uint8_t owner, const Ogre::Vector3& pos, float maxDist); // that player's nearest ghost
 bool chars_debugAttack(Character* attacker, Character* target);   // debug: attack order
 
@@ -150,6 +153,7 @@ void items_tick(DWORD now);
 void items_onMessage(const mp::NetEvent& e);
 void items_onPlayerLeft(uint8_t id);
 void items_onWorldReload();
+void items_worldForget(uint8_t player);   // that player reloaded / left: its open town containers are forgotten
 mp::Bytes items_inventoryMsg(uint8_t kind, uint32_t id, Inventory* inv, int money = -1);   // body of MSG_INVENTORY
 int items_moneyOf(Character* c);
 Inventory* items_backpackOf(Character* c);                 // worn backpack's own inventory, NULL if none
@@ -232,11 +236,13 @@ bool weather_install();
 void weather_tick(DWORD now);
 void weather_onMessage(const mp::NetEvent& e);
 void weather_onWorldReload();
+void weather_sendNow();                  // host: send it at the next tick (join, resync)
 
 // World.cpp: time of day / weather from the host
 bool world_install();
 void world_tick(DWORD now);
 void world_reset();
+void world_sendNow();                    // host: send the clock at the next tick (join, resync)
 void world_onMessage(const mp::NetEvent& e);
 void world_debugShift();
 

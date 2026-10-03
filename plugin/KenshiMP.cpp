@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <string.h>
 #include <map>
 #include <set>
 
@@ -43,6 +44,9 @@ namespace
 
     bool g_started = false;
     bool g_ready = false;
+    const DWORD REGROUP_HINT_DELAY_MS = 20000;   // the host's positions have arrived by then
+    const float REGROUP_HINT_DISTANCE = 1500.f;
+    DWORD g_regroupHintAt = 0;
 
     // A game world exists: we have a squad (not on the title screen / character editor / loading).
     bool worldLoaded() { return ou && ou->player && ou->player->playerCharacters.size() > 0; }
@@ -89,6 +93,46 @@ namespace
     }
 
     bool fileExists(const std::string& p) { DWORD a = GetFileAttributesA(p.c_str()); return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY); }
+
+    // Host: player numbers by name, kept between sessions (players.cfg next to kenshimp.cfg). A
+    // player's number names its faction and characters in the host's save, so a friend coming
+    // back after the host restarted gets the same number, not the one of whoever joined first.
+    std::string slotsPath()
+    {
+        std::string p = userConfigPath();
+        size_t slash = p.find_last_of("\\/");
+        return (slash == std::string::npos ? std::string() : p.substr(0, slash + 1)) + "players.cfg";
+    }
+    void loadSlots()
+    {
+        FILE* f = NULL;
+        if (fopen_s(&f, slotsPath().c_str(), "r") != 0 || !f) return;
+        std::map<std::string, uint8_t> slots;
+        char line[256];
+        while (fgets(line, sizeof(line), f))
+        {
+            // "<number> <name>"
+            char* sp = strchr(line, ' ');
+            if (!sp || line[0] == '#') continue;
+            int id = atoi(line);
+            std::string name(sp + 1);
+            while (!name.empty() && (name[name.size() - 1] == '\n' || name[name.size() - 1] == '\r')) name.erase(name.size() - 1);
+            if (id > 0 && id < MAX_PLAYERS && !name.empty()) slots[name] = (uint8_t)id;
+        }
+        fclose(f);
+        g_session.setKnownSlots(slots);
+        log("player numbers of earlier sessions: %u", (unsigned)slots.size());
+    }
+    void saveSlots()
+    {
+        std::map<std::string, uint8_t> slots = g_session.knownSlots();
+        FILE* f = NULL;
+        if (fopen_s(&f, slotsPath().c_str(), "w") != 0 || !f) return;
+        fprintf(f, "# KenshiMP host: player number and name of everybody who joined (kept for returning players)\n");
+        for (std::map<std::string, uint8_t>::iterator it = slots.begin(); it != slots.end(); ++it)
+            if (it->first.find('\n') == std::string::npos) fprintf(f, "%d %s\n", (int)it->second, it->first.c_str());
+        fclose(f);
+    }
 
     // The player's settings file, created from a template the first time.
     std::string configPath()
@@ -416,6 +460,15 @@ namespace
         case MSG_TRADE:
             trade_onMessage(e);
             break;
+        case MSG_WORLD_CONTAINER:
+            items_onMessage(e);
+            break;
+        case MSG_REGROUP:
+        {
+            uint8_t target = r.u8();
+            if (r.ok()) chars_onRegroup(e.sender, target);
+            break;
+        }
         case MSG_ZONE_MODE:
             npcs_onZoneMode(e);
             break;
@@ -427,7 +480,9 @@ namespace
             chars_forgetMovement(e.sender);
             npcs_onPlayerLeft(e.sender);   // host: forget what that player had, NPCs get re-spawned
             ground_onPlayerLeft(e.sender);  // its old drops are not in its new world: our copies go
+            items_worldForget(e.sender);    // the town containers it had open (or, from the host: we had open) start over
             resendAll();
+            if (g_session.isHost()) { world_sendNow(); weather_sendNow(); }   // its clock and weather right away
             break;
         default:
             chars_onMessage(e);
@@ -478,6 +533,7 @@ namespace
             case NetEvent::EV_PLAYER_JOINED:
                 log("%s joined (title screen)", e.player.name.c_str());
                 g_players[e.player.id] = e.player;
+                if (g_session.isHost()) saveSlots();
                 g_relationPending.insert(e.player.id);
                 break;
             case NetEvent::EV_PLAYER_LEFT:
@@ -548,6 +604,7 @@ namespace
             g_players[e.player.id] = e.player;
             setRelationWith(e.player.id, relationFor(e.player.id));
             resendAll();   // let the newcomer see our squad, gear and town
+            if (g_session.isHost()) { world_sendNow(); weather_sendNow(); saveSlots(); }
             showMessage(TF("%s joined the game", e.player.name.c_str()));
             chat_notice(TF("%s joined the game", e.player.name.c_str()));
             break;
@@ -683,6 +740,7 @@ namespace
         bool ok = false;
         if (g_cfg.mode == "host")
         {
+            loadSlots();
             ok = g_session.host(g_cfg.port, g_cfg.name, g_cfg.faction, err);
             if (ok) steam_onHosting(true, g_cfg.port);   // Steam friends can join too
         }
@@ -836,6 +894,26 @@ namespace
             }
         }
 
+        // Client: a squad that arrived far from the host is told how to join it (once per load).
+        if (g_regroupHintAt && (int)(GetTickCount() - g_regroupHintAt) >= 0)
+        {
+            g_regroupHintAt = 0;
+            Ogre::Vector3 hostAt;
+            std::vector<std::pair<uint32_t, Character*> > mine;
+            chars_localCharacters(mine);
+            if (!mine.empty() && mine[0].second && chars_playerPosition(HOST_ID, hostAt))
+            {
+                float d = mine[0].second->getPosition().distance(hostAt);
+                if (d > REGROUP_HINT_DISTANCE)
+                {
+                    log("regroup hint: %.0f units from the host", d);
+                    std::string hint = TF("You are far from %s: %s > Go to, or type /goto, to travel to them.", playerName(HOST_ID).c_str(), g_cfg.lobbyKeyName.c_str());
+                    showMessage(hint);
+                    chat_notice(hint);
+                }
+            }
+        }
+
         if (g_purgePending)
         {
             // Ghosts that a previous session left in the savegame come back as orphans.
@@ -849,6 +927,7 @@ namespace
             resendAll();
             g_session.send(MSG_RESYNC, Bytes());   // and ask everybody for their state
             log("world ready, resync requested");
+            g_regroupHintAt = g_session.isHost() ? 0 : GetTickCount() + REGROUP_HINT_DELAY_MS;
             if (g_cfg.debugKeys)
             {
                 // Test data: a few prosthetic limb ids of this game (for the bot's limb test).

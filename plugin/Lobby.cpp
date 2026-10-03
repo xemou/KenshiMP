@@ -79,7 +79,7 @@ namespace
         {
             g_dipPlayer = atoi(n.c_str() + 8);
             char k = n[n.size() - 1];
-            g_dipValue = k == 'w' ? -100.f : k == 'a' ? 100.f : k == 't' ? 1000.f : 0.f;   // 't': trade
+            g_dipValue = k == 'w' ? -100.f : k == 'a' ? 100.f : k == 't' ? 1000.f : k == 'g' ? 2000.f : 0.f;   // 't': trade, 'g': go to
             return;
         }
         if (n == "KMP_SteamFriends") { g_friendsMode = !g_friendsMode; g_dipShown.clear(); return; }
@@ -339,25 +339,25 @@ namespace
         try
         {
             while (g_dipPanel->getChildCount() > 0) MyGUI::Gui::getInstance().destroyWidget(g_dipPanel->getChildAt(0));
-            int w = g_dipPanel->getWidth(), bw = 66, gap = 4;
+            int w = g_dipPanel->getWidth(), bw = 60, gap = 4;
             for (size_t i = 0; i < rows.size(); ++i)
             {
                 int y = (int)i * DIP_ROW_H;
                 float rel = rows[i].second;
                 const char* state = rel < 0 ? T("at war") : rel > 50 ? T("allied") : T("neutral");
                 MyGUI::TextBox* t = g_dipPanel->createWidget<MyGUI::TextBox>("Kenshi_TextboxStandardText",
-                    MyGUI::IntCoord(0, y, w - 4 * (bw + gap), DIP_ROW_H - 4), MyGUI::Align::Default);
+                    MyGUI::IntCoord(0, y, w - 5 * (bw + gap), DIP_ROW_H - 4), MyGUI::Align::Default);
                 std::string label = rows[i].first.name + " - " + state;
                 std::string esc;
                 for (size_t k = 0; k < label.size(); ++k) { if (label[k] == '#') esc += '#'; esc += label[k]; }
                 t->setCaption(esc);
-                const char* caps[4] = { "War", "Peace", "Ally", trade_pendingFrom(rows[i].first.id) ? "Accept" : "Trade" };
-                const char kinds[4] = { 'w', 'p', 'a', 't' };
-                for (int k = 0; k < 4; ++k)
+                const char* caps[5] = { "War", "Peace", "Ally", trade_pendingFrom(rows[i].first.id) ? "Accept" : "Trade", "Go to" };
+                const char kinds[5] = { 'w', 'p', 'a', 't', 'g' };
+                for (int k = 0; k < 5; ++k)
                 {
                     char name[48]; sprintf_s(name, "KMP_Dip_%d_%c", (int)rows[i].first.id, kinds[k]);
                     MyGUI::Button* b = g_dipPanel->createWidget<MyGUI::Button>("Kenshi_Button1",
-                        MyGUI::IntCoord(w - (4 - k) * (bw + gap), y, bw, DIP_ROW_H - 4), MyGUI::Align::Default, name);
+                        MyGUI::IntCoord(w - (5 - k) * (bw + gap), y, bw, DIP_ROW_H - 4), MyGUI::Align::Default, name);
                     b->setCaption(T(caps[k]));
                     b->eventMouseButtonClick += MyGUI::newDelegate(onButton);
                 }
@@ -620,6 +620,7 @@ void lobby_tick()
         int p = g_dipPlayer; g_dipPlayer = -1;
         if (ready())
         {
+            if (g_dipValue > 1500.f) { showMessage(chars_regroupTo((uint8_t)p)); destroy(); return; }   // go to: see where we land
             if (g_dipValue > 500.f) { trade_request((uint8_t)p); destroy(); return; }   // trade: our window makes room for the game's
             diplomacy_set(p, g_dipValue);
         }

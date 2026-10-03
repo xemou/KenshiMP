@@ -137,6 +137,9 @@ namespace
     }
 }
 
+// Host: the clock goes out at the next tick (a player just joined / reloaded its world).
+void world_sendNow() { g_lastSync = 0; }
+
 void world_reset()
 {
     g_hostPaused = false;   // a new session starts from the host's next announcement
