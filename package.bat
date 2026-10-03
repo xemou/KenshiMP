@@ -10,6 +10,7 @@ mkdir "%D%"
 copy /y plugin\out\KenshiMP.dll "%D%\" >nul
 copy /y kenshimp.cfg "%D%\" >nul
 copy /y GUIDE.md "%D%\" >nul
+copy /y GUIDE_FR.md "%D%\" >nul
 copy /y RISKS.md "%D%\" >nul
 copy /y LICENSE "%D%\" >nul
 copy /y NOTICE.md "%D%\" >nul

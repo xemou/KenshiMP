@@ -80,7 +80,7 @@ Everything can also be set by hand in `kenshimp.cfg`:
 ## 4. `kenshimp.cfg` options
 | Option | Default | Purpose |
 |---|---|---|
-| mode | host | off / host / join |
+| mode | off | off / host / join (the Multiplayer window sets it) |
 | address, port | 127.0.0.1, 47000 | host address (client), TCP port |
 | name, faction | | displayed name, name of your faction as seen by others |
 | relation | 0 | starting relation between players (-100 war … 100 allies) |
@@ -105,14 +105,16 @@ Everything can also be set by hand in `kenshimp.cfg`:
 ## 5. Troubleshooting
 | Symptom | Cause / fix |
 |---|---|
-| "PhysX start failure" crash when starting a game | install PhysX 9.10.0513 + copy the PhysX DLLs (§1) |
+| "PhysX start failure" crash when starting a game (with RE_Kenshi) | install PhysX 9.10.0513 + copy the PhysX DLLs (§1) |
 | Log: "Incorrect address in KenshiLib::GetRealAddress" | DLL built without /GL /LTCG (use `package.bat`) |
 | "connection … timed out / refused" | host not running, wrong IP, closed port (router/firewall) → gaming VPN |
 | "Your mods must match the host's" | align the mod list (same order) or `strict_mods=0` on the host |
 | "KenshiMP version mismatch" | install the same KenshiMP version everywhere |
 | A player's squad is frozen | they Alt+Tabbed out of exclusive fullscreen → borderless mode |
 | "timed out (no data for 15 s)" | connection lost; the client reconnects by itself |
-| Where to read the logs | `Kenshi\RE_Kenshi_log.txt`, lines starting "KenshiMP:" |
+| No MULTIPLAYER button, nothing in the logs (without RE_Kenshi) | run `Enable KenshiMP.bat` again (after moving the mod, or if another tool rewrote `Plugins_x64.cfg`) |
+| `KenshiMP_loader.log`: "not supported without RE_Kenshi" | Kenshi was updated by Steam (new executable): wait for a KenshiMP update, or install RE_Kenshi |
+| Where to read the logs | `Kenshi\RE_Kenshi_log.txt` (lines starting "KenshiMP:", written with or without RE_Kenshi) and `Kenshi\KenshiMP_loader.log` |
 
 ## 5b. Smoothness (like a game server)
 - Players send their state **20 times/s** (20 Hz tick), timestamped with their own clock.
@@ -140,7 +142,9 @@ door damage, dismantling), the host's world NPCs and animals around each player,
 recruitment of an NPC by a client (it becomes that client's), the floor each character is on,
 **inventories** (character bags, **worn backpacks**, players' chests, the host's merchants and
 NPCs, items on the ground) with owner-validated transfers, **direct trading** between players,
-**hunger**, **severed / crushed limbs / prosthetics**, **weather** of each region, **chat**.
+**hunger**, **severed / crushed limbs / prosthetics**, **weather** of each region, **chat**,
+the host's **world states** (unique NPCs killed or jailed) and the **town changes** they cause,
+**town doors broken** and **town buildings destroyed**, **bounties** for crimes seen in the host's world.
 Additions marked 🧪 in `RISKS.md` were coded and tested offline (protocol, build, imports) but
 still need to be **validated in game**.
 
@@ -175,7 +179,7 @@ still need to be **validated in game**.
 | Client far from the host (unsimulated zone) | the host keeps the zones around clients loaded |
 | Recruiting a ghost (duplicate) | NPC: ownership transferred to the client; a player's character: blocked |
 | F9/F10 pressed in another application | ignored if Kenshi is not focused |
-| Kenshi / RE_Kenshi update | KenshiLib adapts per version; the clock is located dynamically; check the logs after an update |
+| Kenshi / RE_Kenshi update | the loader recognises the game executable and refuses an unknown one (the game starts without multiplayer, nothing breaks); a new address table is made with `tools/rva/make_table.ps1`; the clock and the world-state table are located dynamically |
 | Antivirus blocking the injected DLL | add an exception for the Kenshi folder |
 
 ## 9. Testing without a second PC

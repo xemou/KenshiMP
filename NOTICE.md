@@ -37,4 +37,4 @@ GPLv3 and **its complete corresponding source code is published** at
 stock Steam 1.0.68 table, under the name KenshiLib looks for), `Enable KenshiMP.bat`,
 `Disable KenshiMP.bat`, `kenshimp_enable.ps1`, `kenshimp_disable.ps1`, `KenshiMP.mod`,
 `RE_Kenshi.json`, `kenshimp.cfg` (default template),
-`README.md`, `GUIDE.md`, `RISKS.md`, `LICENSE`, `NOTICE.md`.
+`README.md`, `GUIDE.md`, `GUIDE_FR.md`, `RISKS.md`, `LICENSE`, `NOTICE.md`.
