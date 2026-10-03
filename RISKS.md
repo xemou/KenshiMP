@@ -98,6 +98,7 @@ Legend: ✅ handled (and how it is verified) · 🧪 coded and tested offline, *
 | 73 | Joining a running game far from the other players | 🧪 | Protocol 18: GO TO (multiplayer window) / `/goto` teleports the selected characters next to another player's last known position (refused in combat or at war; announced first so the host's speed check does not warn). Reminder to a client loaded more than 1500 units from the host. |
 | 74 | Clock / weather wrong for a few seconds after joining | 🧪 | The host sends both at once when someone joins or reloads (was: up to 5 s). |
 | 75 | Player number changing when the host restarts | 🧪 | `players.cfg` on the host keeps name -> number between sessions (tested offline: returning player gets its number back after a host restart). |
+| 76 | Host save damaged by a multiplayer bug | 🧪 | `backup_saves=5`: each hosted game is copied (background thread) to `KenshiMP\backups\<save>_<date>` when it is ready; last 5 copies per save kept (copy and pruning tested offline). |
 
 ## Suggested priorities for what comes next
 1. Validate the 🧪 additions in game: ground items, merchant money, speed alert (the bot can drop

@@ -191,6 +191,7 @@ namespace
             else if (k == "load_sharing") g_cfg.loadSharing = toBool(v);
             else if (k == "assault_hostility") g_cfg.assaultHostility = toBool(v);
             else if (k == "town_sync") g_cfg.townSync = toBool(v);
+            else if (k == "backup_saves") { int n = atoi(v.c_str()); g_cfg.backupSaves = n < 0 ? 0 : (n > 50 ? 50 : n); }
             else if (k == "player_names") g_cfg.playerNames = toBool(v);
             else if (k == "autotest_load") g_cfg.autotestLoad = v;
             else if (k == "autotest") g_cfg.autotest = toBool(v);
@@ -823,6 +824,7 @@ namespace
         if (!worldLoaded()) return;   // nothing to sync on the title screen / while loading
 
         chat_tick();
+        backup_tick();
         // Chat: opened when Enter is released, so that key press does not also reach the new box.
         static bool enter = false, openOnRelease = false;
         // Decided when Enter goes down: an Enter that validates a game dialog (save, rename...) is not for us.
@@ -928,6 +930,7 @@ namespace
             g_session.send(MSG_RESYNC, Bytes());   // and ask everybody for their state
             log("world ready, resync requested");
             g_regroupHintAt = g_session.isHost() ? 0 : GetTickCount() + REGROUP_HINT_DELAY_MS;
+            if (g_session.isHost()) backup_hostSave();   // its save holds the shared world: a copy first
             if (g_cfg.debugKeys)
             {
                 // Test data: a few prosthetic limb ids of this game (for the bot's limb test).

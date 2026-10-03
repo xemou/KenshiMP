@@ -94,6 +94,7 @@ namespace
         { "Several players match '%s', type more of the name.", "Plusieurs joueurs correspondent à « %s », tapez plus de lettres." },
         { "Commands: /players, /war <player|all>, /peace <player|all>, /ally <player|all>, /goto [player], /report",
           "Commandes : /joueurs, /guerre <joueur|tous>, /paix <joueur|tous>, /allie <joueur|tous>, /aller [joueur], /rapport" },
+        { "Your save was backed up (KenshiMP\\backups).", "Votre sauvegarde a été copiée (KenshiMP\\backups)." },
         // --- bug report (/report, BUG REPORT button)
         { "Bug report", "Rapport de bug" },
         { "Bug report: could not create the folder.", "Rapport de bug : impossible de créer le dossier." },

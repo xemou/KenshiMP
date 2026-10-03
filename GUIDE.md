@@ -107,6 +107,7 @@ Everything can also be set by hand in `kenshimp.cfg`:
 | auto_reconnect | 1 | automatic client reconnect |
 | weather_sync | 1 | the host's weather is imposed on everyone |
 | town_sync | 1 | the host's world states (unique NPCs killed / jailed) and the town changes they cause (destroyed, abandoned, taken) apply to everyone; a changed town shows its new version when its area loads; town doors broken or repaired and town buildings destroyed by anyone are the same for everyone |
+| backup_saves | 5 | host: when a hosted game is ready, its save folder is copied (in the background) to `%LOCALAPPDATA%\kenshi\KenshiMP\backups\<save>_<date>`; the last N copies of each save are kept (0 = off). To restore one, put it back in Kenshi's save folder without the `_<date>` part |
 | lobby_key | F4 | Multiplayer window key (F1…F12; F6 is taken by the CheatMenu mod) |
 | language | auto | mod language: auto (the game's), fr or en |
 | show_players_on_map | 1 | other players' squads on the world map (except when at war) |

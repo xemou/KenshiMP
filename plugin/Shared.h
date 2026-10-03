@@ -47,6 +47,7 @@ struct Config
     bool assaultHostility; // attacking a player's characters outside a war lowers their faction's relation
     bool playerNames;      // other players' characters always show their name above their head
     bool townSync;         // host's world states (unique NPCs dead/jailed) and town changes apply to everybody
+    int backupSaves;       // host: backups kept per save (copied when a hosted game is ready), 0 = off
     std::string autotestLoad;  // test: save loaded automatically from the title screen
     bool autotest;             // test: scripted checks once another player is there (log "autotest:")
     std::string lobbyKeyName;
@@ -54,7 +55,7 @@ struct Config
                relation(0), ghostAI("none"), syncAppearance(true), syncEquipment(true), syncBuildings(true),
                debugKeys(false), npcSync(true), strictMods(true), autoReconnect(true), pauseSync(true),
                renderSmoothing(true), weatherSync(true), lobbyKey(VK_F4), lobbyKeyName("F4"), language("auto"), playersOnMap(true),
-               tuneSpeedMatch(true), tuneTrail(true), tuneRepath(true), tuneUnblock(true), tuneOnScreen(true), ghostNoCollide(false), loadSharing(false), assaultHostility(false), playerNames(true), townSync(true), autotest(false) {}
+               tuneSpeedMatch(true), tuneTrail(true), tuneRepath(true), tuneUnblock(true), tuneOnScreen(true), ghostNoCollide(false), loadSharing(false), assaultHostility(false), playerNames(true), townSync(true), backupSaves(5), autotest(false) {}
 };
 
 extern mp::Session g_session;
@@ -68,6 +69,8 @@ bool mp_worldLoaded();                   // a game is loaded (our squad exists)
 std::string mp_modList();                // "game <version>;mod1;mod2..." as checked at handshake
 std::string mp_configDir();              // %LOCALAPPDATA%\kenshi\KenshiMP\ (with the final backslash)
 std::string report_write();              // Report.cpp: bug report folder on the desktop, returns the text to show
+void backup_hostSave();                  // Backup.cpp: host, game ready: copy its save folder (background thread)
+void backup_tick();                      // main thread: reports a finished copy
 
 // Lang.cpp: the mod speaks the game's language (texts are written in English, translated here)
 void lang_init();

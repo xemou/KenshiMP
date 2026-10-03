@@ -7,6 +7,7 @@ v18 - first public beta (protocol 18)
 - Player numbers kept between host restarts (same name = same number)
 - Version shown in the Multiplayer window title: everybody must have the same one
 
+- The host's save is backed up automatically each time a hosted game starts (KenshiMP\backups, last 5 kept)
 - /report (or BUG REPORT in the Multiplayer window): logs, settings and session summary in one folder on the desktop
 
 Back up your saves. Bug reports: github.com/xemou/KenshiMP (attach the /report folder, zipped).
