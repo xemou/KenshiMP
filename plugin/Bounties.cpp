@@ -14,6 +14,7 @@
 #include <kenshi/Character.h>
 #include <kenshi/Faction.h>
 #include <kenshi/BountyManager.h>
+#include <kenshi/PlayerInterface.h>
 
 #include "Shared.h"
 
@@ -304,6 +305,22 @@ std::string bounties_debugFaction()
                 && f->getData()->stringID.find("gamedata.base") != std::string::npos)
                 return f->getData()->stringID;
         }
+    // Else the first faction the game keeps a bounty for, tried on our own first character
+    // (test games only) and cleared at once.
+    std::vector<std::pair<uint32_t, Character*> > mine;
+    chars_localCharacters(mine);
+    if (mine.empty() && ou->player && ou->player->playerCharacters.size()) mine.push_back(std::make_pair(0u, ou->player->playerCharacters[0]));
+    if (mine.empty()) return "";
+    for (uint32_t i = 0; i < all->size() && i < 300; ++i)
+    {
+        Faction* f = (*all)[i];
+        if (!f || !f->getData() || f->isThePlayer()) continue;
+        if (!safeAdd(mine[0].second, f, 1)) continue;
+        Table t; readTable(mine[0].second, t);
+        bool kept = t.count(f->getData()->stringID) != 0;
+        safeClear(mine[0].second, f);
+        if (kept) return f->getData()->stringID;
+    }
     return "";
 }
 

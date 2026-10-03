@@ -4,7 +4,7 @@
 
 Jouez à Kenshi entre amis. Chaque joueur garde son escouade, sa faction, sa base et ses villes ; vous voyez les persos des autres se déplacer, combattre, construire et échanger en temps réel. Les factions des joueurs peuvent être en paix, alliées ou en guerre.
 
-[b]C'est un plugin de code : il demande RE_Kenshi (voir Prérequis). Sans lui, ce mod ne fait rien.[/b]
+[b]C'est un plugin de code : après l'abonnement, lancez une fois « Enable KenshiMP.bat » (voir Comment jouer). Pas besoin de RE_Kenshi sur Steam.[/b]
 
 [h2]Fonctionnalités[/h2]
 [list]
@@ -22,15 +22,14 @@ Jouez à Kenshi entre amis. Chaque joueur garde son escouade, sa faction, sa bas
 
 [h2]Prérequis (chaque joueur)[/h2]
 [list]
-[*] Kenshi sur Steam ou GOG (1.0.65 ou 1.0.68)
-[*] [url=https://www.nexusmods.com/kenshi/mods/847]RE_Kenshi[/url] 0.3.5 ou plus récent, installé avec son installateur
-[*] NVIDIA PhysX System Software 9.10.0513 et les DLL PhysX de Kenshi à côté du Kenshi_x64.exe de RE_Kenshi (détails dans GUIDE.md)
+[*] Kenshi sur Steam, tel que Steam l'installe : rien d'autre
+[*] Sur GOG, ou si vous l'utilisez déjà : [url=https://www.nexusmods.com/kenshi/mods/847]RE_Kenshi[/url] 0.3.5 ou plus récent (avec alors NVIDIA PhysX System Software 9.10.0513 et les DLL PhysX de Kenshi à côté du Kenshi_x64.exe de RE_Kenshi, détails dans GUIDE.md). Les joueurs avec et sans RE_Kenshi peuvent jouer ensemble.
 [*] Exactement la même liste de mods, dans le même ordre, et la même version de KenshiMP (l'hôte refuse sinon et indique ce qui diffère)
 [/list]
 
 [h2]Comment jouer[/h2]
 [olist]
-[*] Abonnez-vous, cochez KenshiMP dans l'onglet Mods du lanceur. Le mode fenêtré sans bordure est conseillé.
+[*] Abonnez-vous. Sans RE_Kenshi : ouvrez le dossier du mod (steamapps\workshop\content\233860\<numéro de l'objet>) et lancez une fois « Enable KenshiMP.bat » (« Disable KenshiMP.bat » l'annule ; le solo n'est pas touché). Puis cochez KenshiMP dans l'onglet Mods du lanceur. Le mode fenêtré sans bordure est conseillé.
 [*] Hôte : ouvrez la fenêtre Multijoueur (bouton sous le menu titre, ou F4), entrez votre nom et votre faction, cliquez Héberger, puis lancez ou chargez une partie. Donnez votre IP à vos amis.
 [*] Amis : même fenêtre, entrez l'adresse de l'hôte, cliquez Rejoindre, puis lancez une nouvelle partie (conseillé).
 [*] Par Internet : invitez vos amis par Steam (AMIS STEAM > INVITER dans la fenêtre Multijoueur, ou « Rejoindre la partie » sur votre profil) : ni adresse IP, ni port, ni VPN. Copies GOG : ouvrez le port TCP 47000 ou utilisez un VPN de jeu (Radmin, ZeroTier, Tailscale).
@@ -39,7 +38,7 @@ Les réglages sont enregistrés dans %LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg
 
 [h2]Limites connues[/h2]
 [list]
-[*] Chaque client garde sa propre sauvegarde ; le sort des villes du monde (détruites, prises) n'est pas encore partagé.
+[*] Chaque client garde sa propre sauvegarde ; le monde de l'hôte (villes détruites ou prises, PNJ uniques, portes de ville cassées) y est appliqué pendant la partie.
 [*] Jusqu'à 8 joueurs ; l'hôte doit rester connecté (pas de changement d'hôte).
 [*] D'autres mods de code qui modifient les mêmes fonctions du jeu peuvent entrer en conflit.
 [/list]
@@ -48,4 +47,4 @@ Les réglages sont enregistrés dans %LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg
 Logiciel libre sous licence GNU GPL v3 (il repose sur KenshiLib, lui aussi sous GPL v3).
 Code source, guide complet et suivi des bugs : [url=https://github.com/xemou/KenshiMP]github.com/xemou/KenshiMP[/url]
 
-Signalez les bugs sur GitHub avec votre RE_Kenshi_log.txt (dans le dossier de Kenshi).
+Signalez les bugs sur GitHub avec vos fichiers RE_Kenshi_log.txt et KenshiMP_loader.log (dans le dossier de Kenshi).
