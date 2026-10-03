@@ -9,7 +9,7 @@ Status as of 2026-10-01. ✅ done and seen in game · 🧪 done, not yet seen in
 | Ghost that freezes then teleports | ✅ | Cause: Kenshi's "off-screen" mode (coarse updates of characters outside the camera). Player ghosts are exempted from it. Teleport only if the ghost is really lost. Extreme path replayed: 1980 → 5 teleports, frozen 62 % → 0 %. |
 | Lag at the start of a sprint (25-50 units) | ✅ | Nudge along the owner's real path (never through a wall) when the engine accelerates too slowly. Measured: mean gap 10.5 → 6 units, 4 teleports over the whole extreme path. |
 | Task animations | 🧪 | Wider list (medic, robot repair, machines to fill/empty/unjam, mines). A task is only copied if the owner is standing still (otherwise the ghost stayed planted). The ghost is released when the task or combat ends. |
-| Player name on their characters | ✅ | The ghost is called "Name [Nickname]" and its name tag is displayed. |
+| Player name on their characters | ✅ | The ghost is called "Name [Nickname]"; that name is always drawn above it in the player's colour (`player_names`, to check in game). |
 | Robotic prosthetics | ✅ | Seen in game: the ghost's right arm shows up as a prosthetic (blue bar in health), applied only once. |
 | States: hunger, encumbrance | ✅ | The owner's hunger is sent with the stats and applied to the ghost (seen in the log in game). Encumbrance follows from the already mirrored inventory. Kenshi has no drunkenness. |
 | Backpack contents | ✅ | The worn backpack is one more container (`CONTAINER_BACKPACK`): its contents are mirrored on the ghost and an item taken from it is removed on the owner's side (seen in game, "Refitted Oil Drum Backpack"). Put back when the ghost is re-dressed. |

@@ -203,6 +203,8 @@ namespace
     }
 }
 
+const char* chat_playerColour(uint8_t id) { return playerColour(id); }
+
 std::string chat_clean(const std::string& in)
 {
     std::string out;

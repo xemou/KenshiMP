@@ -19,6 +19,7 @@ Summary of what the first public build contains (fill in the final protocol numb
 - Buildings and towns replicated both ways
 - Items: bodies, chests, worn backpacks, ground items, traders' stock and money, direct trade between players
 - Multiplayer window (title screen / pause menu / F4), chat, players on the world map, English + French
+- Other players' names always shown above their characters, in their chat colour (`player_names`)
 - Robust networking: timeouts, auto-reconnect, version + mod list check, input validation
 - Runs without RE_Kenshi on the stock Steam game (loader + address table for 1.0.68,
   `Enable KenshiMP.bat`); RE_Kenshi still supported, both kinds of players can play together

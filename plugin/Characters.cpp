@@ -42,6 +42,10 @@
 #include <kenshi/combat/RangedCombatClass.h>
 #include <kenshi/Gear.h>
 #include <kenshi/Animation/AnimationClass.h>
+#include <kenshi/CameraClass.h>
+#include <kenshi/gui/ScreenLabel.h>
+#include <ogre/OgreCamera.h>
+#include <mygui/MyGUI.h>
 #include <core/Functions.h>
 
 #include "Shared.h"
@@ -1617,6 +1621,7 @@ int chars_ghostTotal() { return (int)g_ghosts.size(); }
 static void clearDrawOverrides();
 void chars_onWorldReload()
 {
+    chars_clearPlayerNames();
     clearDrawOverrides();   // their animation objects died with the old world
     g_ghosts.clear();
     g_onMap.clear();   // the map was rebuilt with the world
@@ -1892,72 +1897,147 @@ void chars_preFrame()
     }
 }
 
-// Other players' characters always show their name tag above their head. A character's tag
-// (CharacterNameTag, a ScreenLabel) is drawn by its update() only while its "visible" flag (byte +8)
-// is set, and the game clears that flag every frame for characters that are neither selected nor
-// hovered (unless its own "show names" toggle is on). So update() is hooked through the tag's
-// vtable (found at run time from a ghost's tag, slot 1) and the flag is set right before it runs,
-// for other players' characters only.
+// Other players' characters always show their name above their head. Hooking the game's own name
+// tag (CharacterNameTag) did not keep it visible, so the names are drawn by us: one MyGUI text per
+// other player's character, placed each frame where its head projects on the screen through the
+// game camera (Ogre), in the colour of its player (same as the chat). Hidden behind the camera, off
+// screen and far away.
 namespace
 {
-    const int MAX_TAGS = 128;
-    void* volatile g_playerTags[MAX_TAGS];
-    volatile long g_playerTagCount = 0;
-    typedef void (*TagUpdateFn)(void*);
-    TagUpdateFn g_tagUpdateOrig = NULL;
-    void** g_tagVtable = NULL;
+    const float NAME_MAX_DISTANCE = 300.f;   // from the camera
+    const float NAME_HEAD_HEIGHT = 2.3f;     // above the character's position, if its tag gives none
+    const int NAME_W = 320, NAME_H = 26;
 
-    void tagUpdateHook(void* tag)
-    {
-        long n = g_playerTagCount;
-        for (long i = 0; i < n && i < MAX_TAGS; ++i)
-            if (g_playerTags[i] == tag) { *((bool*)tag + 8) = true; break; }
-        g_tagUpdateOrig(tag);
-    }
+    struct NameLabel { MyGUI::EditBox* w; std::string text; bool shown; NameLabel() : w(NULL), shown(false) {} };
+    std::map<uint32_t, NameLabel> g_names;
+    bool g_namesFailed = false;
 
-    bool safeTagOf(Character* c, void** out)
-    {
-        __try { *out = (void*)c->nameTag; return *out != NULL; }
-        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-    }
-
-    // Replaces slot 1 (update) of the tags' vtable, once.
-    bool safeHookTagVtable(void* tag)
+    // The game camera, read from the player interface (PlayerInterface::camera -> CameraClass::camera).
+    Ogre::Camera* safeGameCamera()
     {
         __try
         {
-            void** vt = *(void***)tag;
-            if (!vt || vt[1] == (void*)&tagUpdateHook) return true;
-            DWORD old = 0;
-            if (!VirtualProtect(&vt[1], sizeof(void*), PAGE_READWRITE, &old)) return false;
-            g_tagUpdateOrig = (TagUpdateFn)vt[1];
-            vt[1] = (void*)&tagUpdateHook;
-            VirtualProtect(&vt[1], sizeof(void*), old, &old);
-            g_tagVtable = vt;
-            return true;
+            if (!ou || !ou->player || !ou->player->camera) return NULL;
+            return ou->player->camera->camera;
         }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return NULL; }
+    }
+    bool safeCameraMatrices(Ogre::Camera* cam, Ogre::Matrix4* view, Ogre::Matrix4* proj, Ogre::Vector3* at)
+    {
+        __try { *view = cam->getViewMatrix(); *proj = cam->getProjectionMatrix(); *at = cam->getDerivedPosition(); return true; }
         __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
     }
+    // Height of the game's own name tag above the character (ScreenLabel::trackingOffset), when sane.
+    float safeTagHeight(Character* c)
+    {
+        __try
+        {
+            ScreenLabel* tag = (ScreenLabel*)c->nameTag;
+            if (tag)
+            {
+                float y = tag->trackingOffset.y;
+                if (y > 0.5f && y < 50.f) return y;
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {}
+        return NAME_HEAD_HEIGHT;
+    }
+
+    MyGUI::EditBox* createName()
+    {
+        try
+        {
+            MyGUI::Gui* gui = MyGUI::Gui::getInstancePtr();
+            if (!gui) return NULL;
+            MyGUI::EditBox* w = gui->createWidget<MyGUI::EditBox>("Kenshi_WordWrapEmpty",
+                MyGUI::IntCoord(0, 0, NAME_W, NAME_H), MyGUI::Align::Default, "Main");
+            if (!w) return NULL;
+            w->setEditReadOnly(true);
+            w->setEditMultiLine(false);
+            w->setTextAlign(MyGUI::Align::Center);
+            w->setTextShadow(true);
+            w->setNeedMouseFocus(false);       // never steals clicks from the game
+            w->setNeedKeyFocus(false);
+            w->setVisible(false);
+            return w;
+        }
+        catch (...) { return NULL; }
+    }
+    void destroyName(NameLabel& l)
+    {
+        try { if (l.w) MyGUI::Gui::getInstance().destroyWidget(l.w); } catch (...) {}
+        l.w = NULL;
+    }
+    void hideName(NameLabel& l)
+    {
+        if (!l.shown || !l.w) return;
+        l.shown = false;
+        try { l.w->setVisible(false); } catch (...) {}
+    }
+}
+
+void chars_clearPlayerNames()
+{
+    for (std::map<uint32_t, NameLabel>::iterator it = g_names.begin(); it != g_names.end(); ++it) destroyName(it->second);
+    g_names.clear();
 }
 
 void chars_showPlayerNames()
 {
-    if (!g_cfg.playerNames) { g_playerTagCount = 0; return; }
-    long n = 0;
-    for (std::map<uint32_t, Ghost>::iterator it = g_ghosts.begin(); it != g_ghosts.end() && n < MAX_TAGS; ++it)
+    if (!g_cfg.playerNames || g_namesFailed) { if (!g_names.empty()) chars_clearPlayerNames(); return; }
+    Ogre::Camera* cam = safeGameCamera();
+    Ogre::Matrix4 view, proj;
+    Ogre::Vector3 camPos;
+    bool haveCam = cam && safeCameraMatrices(cam, &view, &proj, &camPos);
+    MyGUI::IntSize screen(0, 0);
+    try { screen = MyGUI::RenderManager::getInstance().getViewSize(); } catch (...) { haveCam = false; }
+
+    std::set<uint32_t> seen;
+    for (std::map<uint32_t, Ghost>::iterator it = g_ghosts.begin(); it != g_ghosts.end(); ++it)
     {
         if (isNpcNetId(it->first)) continue;
         Character* c = it->second.h.getCharacter();
-        void* tag = NULL;
-        if (!c || !safeTagOf(c, &tag)) continue;
-        if (!g_tagVtable)
+        if (!c) continue;
+        seen.insert(it->first);
+        NameLabel& l = g_names[it->first];
+        if (!l.w)
         {
-            if (safeHookTagVtable(tag)) log("player names: name tags hooked (vtable %p)", (void*)g_tagVtable);
-            else { static bool warned = false; if (!warned) { warned = true; log("player names: could not hook name tags"); } }
+            l.w = createName(); l.shown = false; l.text.clear();
+            if (!l.w)
+            {
+                g_names.erase(it->first);
+                g_namesFailed = true;
+                log("player names: could not create the name labels, disabled");
+                chars_clearPlayerNames();
+                return;
+            }
         }
-        g_playerTags[n++] = tag;
+        if (!haveCam) { hideName(l); continue; }
+
+        // Where the model is drawn (render smoothing may draw it off the simulated body).
+        Ghost& g = it->second;
+        Ogre::Vector3 at = g_cfg.renderSmoothing && g.hasVisual && g.blend > 0.f ? g.lastDrawn : c->getPosition();
+        at.y += safeTagHeight(c);
+        Ogre::Vector3 v = view * at;   // camera space: the camera looks down -Z
+        if (v.z > -0.5f || camPos.distance(at) > NAME_MAX_DISTANCE) { hideName(l); continue; }
+        Ogre::Vector3 p = proj * v;    // normalised device coordinates (-1..1)
+        if (p.x < -1.1f || p.x > 1.1f || p.y < -1.1f || p.y > 1.1f) { hideName(l); continue; }
+        int x = (int)((p.x * 0.5f + 0.5f) * screen.width) - NAME_W / 2;
+        int y = (int)((0.5f - p.y * 0.5f) * screen.height) - NAME_H;
+
+        std::string text = std::string(chat_playerColour(netIdOwner(it->first))) + chat_clean(c->getName());
+        try
+        {
+            if (text != l.text) { l.text = text; l.w->setCaption(text); }
+            l.w->setPosition(x, y);
+            if (!l.shown) { l.shown = true; l.w->setVisible(true); }
+        }
+        catch (...) {}
     }
-    g_playerTagCount = n;
+    // Characters gone (left, died and removed, world reloaded...): drop their labels.
+    for (std::map<uint32_t, NameLabel>::iterator it = g_names.begin(); it != g_names.end(); )
+        if (!seen.count(it->first)) { destroyName(it->second); g_names.erase(it++); }
+        else ++it;
 }
 
 void chars_renderTick(DWORD now)

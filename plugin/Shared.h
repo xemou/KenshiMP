@@ -104,7 +104,8 @@ bool chars_isGhost(Character* c);
 int chars_ghostTotal();
 void chars_preFrame();                   // before the engine's frame update
 void chars_renderTick(DWORD now);        // after it, before drawing: render-layer smoothing
-void chars_showPlayerNames();            // other players' name tags stay visible (player_names)
+void chars_showPlayerNames();            // other players' names drawn above their characters (player_names)
+void chars_clearPlayerNames();           // remove those labels (out of game, world reloaded)
 void chars_logRenderStats();
 void chars_releaseGhost(uint32_t id);
 void chars_claimNpc(uint32_t id, Character* c);   // take over a world NPC (host drops its copy)
@@ -219,6 +220,7 @@ bool chat_isOpen();
 void chat_tick();
 void chat_onWorldReload();
 std::string chat_clean(const std::string& in);   // strip control characters, escape colour codes
+const char* chat_playerColour(uint8_t id);       // MyGUI colour code of that player (chat, name labels)
 
 // KenshiMP.cpp: diplomacy with one player (id) or everybody (-1); value -100 war .. 100 allies
 void diplomacy_set(int player, float value);

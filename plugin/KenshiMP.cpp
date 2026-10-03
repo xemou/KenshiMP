@@ -1130,7 +1130,7 @@ void mainLoop_hook(GameWorld* thisptr, float time)
     // The engine has updated and placed every body for this frame: now draw ghosts on their
     // smoothed network path (render layer), right before the frame is presented.
     if (live) chars_renderTick(GetTickCount());
-    if (live) chars_showPlayerNames();
+    if (live) chars_showPlayerNames(); else chars_clearPlayerNames();
 }
 
 __declspec(dllexport) void startPlugin()
