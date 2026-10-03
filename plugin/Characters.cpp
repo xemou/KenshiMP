@@ -1892,6 +1892,74 @@ void chars_preFrame()
     }
 }
 
+// Other players' characters always show their name tag above their head. A character's tag
+// (CharacterNameTag, a ScreenLabel) is drawn by its update() only while its "visible" flag (byte +8)
+// is set, and the game clears that flag every frame for characters that are neither selected nor
+// hovered (unless its own "show names" toggle is on). So update() is hooked through the tag's
+// vtable (found at run time from a ghost's tag, slot 1) and the flag is set right before it runs,
+// for other players' characters only.
+namespace
+{
+    const int MAX_TAGS = 128;
+    void* volatile g_playerTags[MAX_TAGS];
+    volatile long g_playerTagCount = 0;
+    typedef void (*TagUpdateFn)(void*);
+    TagUpdateFn g_tagUpdateOrig = NULL;
+    void** g_tagVtable = NULL;
+
+    void tagUpdateHook(void* tag)
+    {
+        long n = g_playerTagCount;
+        for (long i = 0; i < n && i < MAX_TAGS; ++i)
+            if (g_playerTags[i] == tag) { *((bool*)tag + 8) = true; break; }
+        g_tagUpdateOrig(tag);
+    }
+
+    bool safeTagOf(Character* c, void** out)
+    {
+        __try { *out = (void*)c->nameTag; return *out != NULL; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+
+    // Replaces slot 1 (update) of the tags' vtable, once.
+    bool safeHookTagVtable(void* tag)
+    {
+        __try
+        {
+            void** vt = *(void***)tag;
+            if (!vt || vt[1] == (void*)&tagUpdateHook) return true;
+            DWORD old = 0;
+            if (!VirtualProtect(&vt[1], sizeof(void*), PAGE_READWRITE, &old)) return false;
+            g_tagUpdateOrig = (TagUpdateFn)vt[1];
+            vt[1] = (void*)&tagUpdateHook;
+            VirtualProtect(&vt[1], sizeof(void*), old, &old);
+            g_tagVtable = vt;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+}
+
+void chars_showPlayerNames()
+{
+    if (!g_cfg.playerNames) { g_playerTagCount = 0; return; }
+    long n = 0;
+    for (std::map<uint32_t, Ghost>::iterator it = g_ghosts.begin(); it != g_ghosts.end() && n < MAX_TAGS; ++it)
+    {
+        if (isNpcNetId(it->first)) continue;
+        Character* c = it->second.h.getCharacter();
+        void* tag = NULL;
+        if (!c || !safeTagOf(c, &tag)) continue;
+        if (!g_tagVtable)
+        {
+            if (safeHookTagVtable(tag)) log("player names: name tags hooked (vtable %p)", (void*)g_tagVtable);
+            else { static bool warned = false; if (!warned) { warned = true; log("player names: could not hook name tags"); } }
+        }
+        g_playerTags[n++] = tag;
+    }
+    g_playerTagCount = n;
+}
+
 void chars_renderTick(DWORD now)
 {
     if (!g_cfg.renderSmoothing) return;

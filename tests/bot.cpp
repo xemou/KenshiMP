@@ -126,6 +126,14 @@ static void printWorldStates(const char* who, const Bytes& body)
     printf("[%s] world states: %d town(s) changed\n", who, r.ok() ? (int)m : -1);
 }
 
+// KMP_BOT_SHOWCASE=1 (screenshots / videos): a plain second player - no test scripts, its characters
+// carry the bot's name (KMP_BOT_NAME), a few chat lines at fixed times, no automatic answers.
+static bool showcase()
+{
+    char v[8]; size_t n = 0;
+    return getenv_s(&n, v, sizeof(v), "KMP_BOT_SHOWCASE") == 0 && n > 1;
+}
+
 static int hostReplay(const char* file, int port, int seconds, const char* mods)
 {
     { char nm[8]; size_t nl = 0; nearMode = getenv_s(&nl, nm, sizeof(nm), "KMP_TEST_NEAR") == 0 && nl > 1; }
@@ -353,6 +361,7 @@ int main(int argc, char** argv)
     std::string err;
     // Must equal the host's active mod list (see the rejection message if it differs).
     s.setModList(argc > 6 ? argv[6] : "game 1.0.65;base;Newwworld;Dialogue;rebirth;KenshiMP", true);
+    { char pw[128]; size_t pl = 0; if (getenv_s(&pl, pw, sizeof(pw), "KMP_BOT_PASSWORD") == 0 && pl > 1) s.setPassword(pw); }   // host's session password
     char botName[32] = "Bot"; size_t bnl = 0;
     if (getenv_s(&bnl, botName, sizeof(botName), "KMP_BOT_NAME") != 0 || bnl <= 1) strcpy_s(botName, "Bot");
     if (!s.join(addr, port, botName, std::string(botName) + " Nation", err)) { printf("join failed: %s\n", err.c_str()); return 1; }
@@ -363,6 +372,7 @@ int main(int argc, char** argv)
     std::map<uint32_t, std::vector<InvItem> > myInv;   // our copies' loose items (ko mode)
     std::map<uint32_t, std::vector<InvItem> > myPack;  // our copies' backpack content
     bool packDirty = false;
+    std::vector<ItemRef> outfit;   // showcase: clothes taken from an NPC
     std::string spoofTemplate;   // a valid character template (spoof test)
     std::map<uint32_t, uint32_t> npcMoney;   // host NPCs that carry money (traders)
     std::set<uint32_t> hostChars;
@@ -473,6 +483,25 @@ int main(int argc, char** argv)
                     if (npcSeen.size() <= 12) printf("[bot] NPC %08x '%s' faction=%s\n", fid, sp.displayName.c_str(), sp.factionSid.c_str());
                 }
                 if (e.msgType == MSG_ENTITY_STATE) ++npcStates;
+                if (e.msgType == MSG_EQUIPMENT && showcase())
+                {
+                    // Showcase: wear the most complete outfit seen on the host's NPCs.
+                    ByteReader re(e.body); uint32_t nid = re.u32(); uint8_t cnt = re.u8();
+                    std::vector<ItemRef> items;
+                    for (int i = 0; i < cnt && re.ok(); ++i) { ItemRef it; it.read(re); items.push_back(it); }
+                    if (re.ok() && items.size() > outfit.size())
+                    {
+                        outfit = items;
+                        printf("[bot] showcase outfit from NPC %08x: %d item(s)\n", nid, (int)outfit.size());
+                        for (std::map<uint32_t, std::vector<ItemRef> >::iterator g = hostGear.begin(); g != hostGear.end(); ++g)
+                        {
+                            ByteWriter w; w.u32(mine(g->first)); w.u8((uint8_t)outfit.size());
+                            for (size_t i = 0; i < outfit.size(); ++i) outfit[i].write(w);
+                            w.u8(4); for (int i = 0; i < 4; ++i) { w.u8(0); ItemRef().write(w); }
+                            sendOwn(s, MSG_EQUIPMENT, w.data);
+                        }
+                    }
+                }
                 if (e.msgType == MSG_INVENTORY)
                 {
                     ++npcInventories;
@@ -504,7 +533,7 @@ int main(int argc, char** argv)
                 if (spoofTemplate.empty()) spoofTemplate = sp.gameDataName;
                 hostChars.insert(sp.netId);
                 ++spawns;
-                sp.netId = mine(sp.netId); sp.displayName = "Bot " + sp.displayName; sp.x += offset;
+                sp.netId = mine(sp.netId); sp.displayName = showcase() ? std::string(botName) : "Bot " + sp.displayName; sp.x += offset;
                 ByteWriter w; sp.write(w); sendOwn(s, MSG_ENTITY_SPAWN, w.data);
                 break;
             }
@@ -597,8 +626,26 @@ int main(int argc, char** argv)
                 uint8_t st[4] = { 0, 0, 0, 0 }; ItemRef li[4];
                 if (r.remaining() && r.u8() == 4) for (int i = 0; i < 4; ++i) { st[i] = r.u8(); li[i].read(r); }
                 if (!r.ok()) break;
+                if (showcase() && isNpcNetId(id))
+                {
+                    // Showcase: wear the most complete outfit seen on the host's NPCs (not the host's own gear).
+                    if (items.size() > outfit.size())
+                    {
+                        outfit = items;
+                        printf("[bot] showcase outfit from NPC %08x: %d item(s)\n", id, (int)outfit.size());
+                        for (std::map<uint32_t, std::vector<ItemRef> >::iterator g = hostGear.begin(); g != hostGear.end(); ++g)
+                        {
+                            ByteWriter w; w.u32(mine(g->first)); w.u8((uint8_t)outfit.size());
+                            for (size_t i = 0; i < outfit.size(); ++i) outfit[i].write(w);
+                            w.u8(4); for (int i = 0; i < 4; ++i) { w.u8(0); ItemRef().write(w); }
+                            sendOwn(s, MSG_EQUIPMENT, w.data);
+                        }
+                    }
+                    break;
+                }
                 hostGear[id] = items;
-                st[0] = 1; li[0] = ItemRef();                    // LEFT_ARM = LIMB_STUMP
+                if (showcase() && !outfit.empty()) { items = outfit; n = (uint8_t)items.size(); }
+                if (!showcase()) { st[0] = 1; li[0] = ItemRef(); }   // LEFT_ARM = LIMB_STUMP (limb test)
                 {
                     // KMP_TEST_LIMB=<prosthetic id>: our copy wears it as its right arm (prosthetic test).
                     char limb[256]; size_t ln = 0;
@@ -666,7 +713,7 @@ int main(int argc, char** argv)
                 std::string text = r.str();
                 if (!r.ok()) break;
                 printf("[bot] chat from host: %s\n", text.c_str());
-                if (text.compare(0, 10, "Bot heard:") != 0) { ByteWriter w; w.str("Bot heard: " + text); s.send(MSG_CHAT, w.data); }
+                if (!showcase() && text.compare(0, 10, "Bot heard:") != 0) { ByteWriter w; w.str("Bot heard: " + text); s.send(MSG_CHAT, w.data); }
                 break;
             }
             case MSG_WEATHER:
@@ -868,6 +915,18 @@ int main(int argc, char** argv)
                     break;
                 }
         }
+        if (showcase())
+        {
+            struct Line { DWORD at; const char* text; };
+            static const Line lines[] = {
+                { 8, "hey! made it" }, { 25, "that's a nice spot for a base" }, { 45, "watch out, hungry bandits around here" },
+                { 70, "let's hit the bar first" }, { 150, "I'll carry the loot" }, { 260, "need to buy some food" },
+                { 400, "careful, skin spiders to the east" }, { 560, "we should build walls soon" } };
+            static size_t next = 0;
+            if (connectedAt && next < sizeof(lines) / sizeof(lines[0]) && since >= lines[next].at)
+            { ByteWriter w; w.str(lines[next].text); s.send(MSG_CHAT, w.data); printf("[bot] chat: %s\n", lines[next].text); ++next; }
+            script = 99;   // no test script
+        }
         if (connectedAt && script == 0 && since >= 20 && !koMode)
         {
             script = 1;
@@ -923,7 +982,7 @@ int main(int argc, char** argv)
             printf("[bot] script: took %s back from %08x\n", took.item.c_str(), tookFrom);
         }
         static bool dropped = false;
-        if (!dropped && since >= 45 && copyKnown && !hostGear.empty() && !hostGear.begin()->second.empty())
+        if (!dropped && !showcase() && since >= 45 && copyKnown && !hostGear.empty() && !hostGear.begin()->second.empty())
         {
             dropped = true;
             InvItem it; const ItemRef& g = hostGear.begin()->second[0];
@@ -981,7 +1040,7 @@ int main(int argc, char** argv)
                 }
             }
         }
-        if (!hitSent && now - t0 > 60000 && !hostChars.empty())
+        if (!hitSent && !showcase() && now - t0 > 60000 && !hostChars.empty())
         {
             hitSent = true;
             for (std::set<uint32_t>::iterator it = hostChars.begin(); it != hostChars.end(); ++it)

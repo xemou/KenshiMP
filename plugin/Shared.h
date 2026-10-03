@@ -45,6 +45,7 @@ struct Config
     bool ghostNoCollide;   // experimental (off): ghosts are not pushed aside by nearby bodies
     bool loadSharing;      // host: a client far from the host simulates its own surroundings
     bool assaultHostility; // attacking a player's characters outside a war lowers their faction's relation
+    bool playerNames;      // other players' characters always show their name above their head
     bool townSync;         // host's world states (unique NPCs dead/jailed) and town changes apply to everybody
     std::string autotestLoad;  // test: save loaded automatically from the title screen
     bool autotest;             // test: scripted checks once another player is there (log "autotest:")
@@ -53,7 +54,7 @@ struct Config
                relation(0), ghostAI("none"), syncAppearance(true), syncEquipment(true), syncBuildings(true),
                debugKeys(false), npcSync(true), strictMods(true), autoReconnect(true), pauseSync(true),
                renderSmoothing(true), weatherSync(true), lobbyKey(VK_F4), lobbyKeyName("F4"), language("auto"), playersOnMap(true),
-               tuneSpeedMatch(true), tuneTrail(true), tuneRepath(true), tuneUnblock(true), tuneOnScreen(true), ghostNoCollide(false), loadSharing(false), assaultHostility(false), townSync(true), autotest(false) {}
+               tuneSpeedMatch(true), tuneTrail(true), tuneRepath(true), tuneUnblock(true), tuneOnScreen(true), ghostNoCollide(false), loadSharing(false), assaultHostility(false), playerNames(true), townSync(true), autotest(false) {}
 };
 
 extern mp::Session g_session;
@@ -103,6 +104,7 @@ bool chars_isGhost(Character* c);
 int chars_ghostTotal();
 void chars_preFrame();                   // before the engine's frame update
 void chars_renderTick(DWORD now);        // after it, before drawing: render-layer smoothing
+void chars_showPlayerNames();            // other players' name tags stay visible (player_names)
 void chars_logRenderStats();
 void chars_releaseGhost(uint32_t id);
 void chars_claimNpc(uint32_t id, Character* c);   // take over a world NPC (host drops its copy)

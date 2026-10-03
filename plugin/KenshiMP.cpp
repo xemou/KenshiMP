@@ -147,6 +147,7 @@ namespace
             else if (k == "load_sharing") g_cfg.loadSharing = toBool(v);
             else if (k == "assault_hostility") g_cfg.assaultHostility = toBool(v);
             else if (k == "town_sync") g_cfg.townSync = toBool(v);
+            else if (k == "player_names") g_cfg.playerNames = toBool(v);
             else if (k == "autotest_load") g_cfg.autotestLoad = v;
             else if (k == "autotest") g_cfg.autotest = toBool(v);
             else if (k == "lobby_key")
@@ -1129,6 +1130,7 @@ void mainLoop_hook(GameWorld* thisptr, float time)
     // The engine has updated and placed every body for this frame: now draw ghosts on their
     // smoothed network path (render layer), right before the frame is presented.
     if (live) chars_renderTick(GetTickCount());
+    if (live) chars_showPlayerNames();
 }
 
 __declspec(dllexport) void startPlugin()
