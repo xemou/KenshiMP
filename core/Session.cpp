@@ -510,7 +510,7 @@ public:
         if (!isRelayed(type)) return;
 
         uint8_t sender = c->playerId;
-        if (type == MSG_DAMAGE || type == MSG_BUILDING_DAMAGE || type == MSG_ITEM_TAKE || type == MSG_ITEM_GIVE || type == MSG_GROUND_TAKE || type == MSG_TRADE || type == MSG_ITEM_UNDO || type == MSG_ZONE_MODE)
+        if (type == MSG_DAMAGE || type == MSG_BUILDING_DAMAGE || type == MSG_ITEM_TAKE || type == MSG_ITEM_GIVE || type == MSG_GROUND_TAKE || type == MSG_TRADE || type == MSG_ITEM_UNDO || type == MSG_ZONE_MODE || type == MSG_WORLD_STATE_REPORT || type == MSG_WORLD_BUILDING_REPORT)
         {
             if (body.empty()) return;
             uint8_t target = body[0];

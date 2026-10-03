@@ -45,6 +45,7 @@ struct Config
     bool ghostNoCollide;   // experimental (off): ghosts are not pushed aside by nearby bodies
     bool loadSharing;      // host: a client far from the host simulates its own surroundings
     bool assaultHostility; // attacking a player's characters outside a war lowers their faction's relation
+    bool townSync;         // host's world states (unique NPCs dead/jailed) and town changes apply to everybody
     std::string autotestLoad;  // test: save loaded automatically from the title screen
     bool autotest;             // test: scripted checks once another player is there (log "autotest:")
     std::string lobbyKeyName;
@@ -52,7 +53,7 @@ struct Config
                relation(0), ghostAI("none"), syncAppearance(true), syncEquipment(true), syncBuildings(true),
                debugKeys(false), npcSync(true), strictMods(true), autoReconnect(true), pauseSync(true),
                renderSmoothing(true), weatherSync(true), lobbyKey(VK_F4), lobbyKeyName("F4"), language("auto"), playersOnMap(true),
-               tuneSpeedMatch(true), tuneTrail(true), tuneRepath(true), tuneUnblock(true), tuneOnScreen(true), ghostNoCollide(false), loadSharing(false), assaultHostility(false), autotest(false) {}
+               tuneSpeedMatch(true), tuneTrail(true), tuneRepath(true), tuneUnblock(true), tuneOnScreen(true), ghostNoCollide(false), loadSharing(false), assaultHostility(false), townSync(true), autotest(false) {}
 };
 
 extern mp::Session g_session;
@@ -136,6 +137,8 @@ void npcs_onPlayerLeft(uint8_t id);
 void npcs_reset();                       // world reloaded / session ended
 void npcs_onZoneMode(const mp::NetEvent& e);   // client: the host says who simulates the world around us
 void npcs_onClaim(uint8_t client, const mp::Bytes& body);
+bool npcs_ownWorld();                    // client: we simulate our own surroundings (load sharing, far from the host)
+bool npcs_clientOwnWorld(uint8_t client); // host: that client simulates its own surroundings
 
 // Items.cpp: inventories and item transfers
 bool items_install();
@@ -231,5 +234,15 @@ void world_tick(DWORD now);
 void world_reset();
 void world_onMessage(const mp::NetEvent& e);
 void world_debugShift();
+
+// Towns.cpp: world states (unique NPCs dead / jailed) and town changes from the host
+bool towns_install();
+void towns_tick(DWORD now);
+void towns_onMessage(const mp::NetEvent& e);
+void towns_resendAll();
+void towns_onWorldReload();
+std::string towns_debugUnique();      // test: a unique NPC's id
+std::string towns_debugOverride();    // test: "townSid;overrideSid" for a far town that has another version
+std::string builds_debugTownDoor();   // test: "sid;x;y;z;door;doorCount" of a nearby town building
 
 } // namespace kmp

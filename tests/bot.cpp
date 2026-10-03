@@ -76,6 +76,55 @@ static Bytes moveNear(uint8_t type, const Bytes& body)
 }
 
 // Host mode: serve a recorded world-NPC stream to whoever joins (tests the client side).
+// Town tests. KMP_TEST_TOWNDOOR=sid;x;y;z;door;doorCount (a town building next to the host's
+// character, from the game's "autotest: town door" log line), KMP_TEST_UNIQUE=<unique NPC id>,
+// KMP_TEST_TOWN=townSid;overrideSid.
+static bool envStr(const char* name, std::string& out)
+{
+    char buf[512]; size_t n = 0;
+    if (getenv_s(&n, buf, sizeof(buf), name) != 0 || n <= 1) return false;
+    out = buf; return true;
+}
+static std::vector<std::string> splitSemi(const std::string& v)
+{
+    std::vector<std::string> out; size_t a = 0;
+    for (;;) { size_t b = v.find(';', a); out.push_back(v.substr(a, b == std::string::npos ? std::string::npos : b - a)); if (b == std::string::npos) break; a = b + 1; }
+    return out;
+}
+static bool townDoor(WorldBuildingState& ref, int& door, int& doors)
+{
+    std::string v; if (!envStr("KMP_TEST_TOWNDOOR", v)) return false;
+    std::vector<std::string> f = splitSemi(v);
+    if (f.size() < 6 || f[0].empty()) return false;
+    ref.sid = f[0]; ref.x = (float)atof(f[1].c_str()); ref.y = (float)atof(f[2].c_str()); ref.z = (float)atof(f[3].c_str());
+    door = atoi(f[4].c_str()); doors = atoi(f[5].c_str());
+    return doors > 0;
+}
+static void printWorldBuildings(const char* who, const Bytes& body)
+{
+    ByteReader r(body); uint16_t n = r.u16();
+    for (uint16_t i = 0; i < n && r.ok(); ++i)
+    {
+        WorldBuildingState st; st.read(r); if (!r.ok()) break;
+        int broken = 0; for (size_t k = 0; k < st.brokenDoors.size(); ++k) broken += st.brokenDoors[k];
+        printf("[%s] town building %s at (%.0f, %.0f, %.0f): %s, %d/%d door(s) broken\n", who, st.sid.c_str(), st.x, st.y, st.z,
+               st.destroyed ? "destroyed" : "standing", broken, (int)st.brokenDoors.size());
+    }
+}
+static void printWorldStates(const char* who, const Bytes& body)
+{
+    ByteReader r(body); uint16_t n = r.u16();
+    printf("[%s] world states: %d unique(s) not alive\n", who, (int)n);
+    std::string want; envStr("KMP_TEST_UNIQUE", want);
+    for (uint16_t i = 0; i < n && r.ok(); ++i)
+    {
+        std::string sid = r.str(); uint8_t st = r.u8(); r.u8();
+        if (r.ok() && sid == want) printf("[%s] world states: test unique %s is %d (0 dead)\n", who, sid.c_str(), (int)st);
+    }
+    uint16_t m = r.u16();
+    printf("[%s] world states: %d town(s) changed\n", who, r.ok() ? (int)m : -1);
+}
+
 static int hostReplay(const char* file, int port, int seconds, const char* mods)
 {
     { char nm[8]; size_t nl = 0; nearMode = getenv_s(&nl, nm, sizeof(nm), "KMP_TEST_NEAR") == 0 && nl > 1; }
@@ -135,6 +184,28 @@ static int hostReplay(const char* file, int port, int seconds, const char* mods)
                 ByteWriter w; w.u8(joined); w.u8((uint8_t)mode);
                 s.sendTo(joined, MSG_ZONE_MODE, w.data);
                 printf("[host] zone mode for player %d: %s\n", (int)joined, mode ? "shared" : "on its own");
+            }
+        }
+        // Town tests (game = client): our world says the test unique is dead, the far town has
+        // its other version and the town door next to the client is broken.
+        static int townStep = 0;
+        if (start && townStep < 2 && GetTickCount() - start >= (DWORD)(townStep == 0 ? 20000 : 50000))
+        {
+            ++townStep;
+            std::string uq, town; envStr("KMP_TEST_UNIQUE", uq); envStr("KMP_TEST_TOWN", town);
+            ByteWriter w;
+            if (!uq.empty()) { w.u16(1); w.str(uq); w.u8(0); w.u8(1); } else w.u16(0);
+            std::vector<std::string> tf = splitSemi(town);
+            if (tf.size() == 2 && !tf[0].empty() && !tf[1].empty()) { w.u16(1); w.str(tf[0]); w.str(tf[1]); } else w.u16(0);
+            s.send(MSG_WORLD_STATES, w.data);
+            printf("[host] world states sent: unique '%s' dead, town '%s'\n", uq.c_str(), town.c_str());
+            WorldBuildingState ref; int door = 0, doors = 0;
+            if (townDoor(ref, door, doors))
+            {
+                ref.brokenDoors.assign(doors, 1);
+                ByteWriter b; b.u16(1); ref.write(b);
+                s.send(MSG_WORLD_BUILDINGS, b.data);
+                printf("[host] town building %s sent with its %d door(s) broken\n", ref.sid.c_str(), doors);
             }
         }
         if (start)
@@ -639,6 +710,18 @@ int main(int argc, char** argv)
                        (int)target, d.buildingNetId, (int)d.door, d.blunt, d.dismantle);
                 break;
             }
+            case MSG_WORLD_BUILDINGS:
+                printWorldBuildings("bot", e.body);
+                break;
+            case MSG_WORLD_STATES:
+                printWorldStates("bot", e.body);
+                break;
+            case MSG_ZONE_MODE:
+            {
+                uint8_t target = r.u8(), shared = r.u8();
+                if (r.ok()) printf("[bot] zone mode from the host: %s (player %d)\n", shared ? "shared world" : "our own world", (int)target);
+                break;
+            }
             case MSG_WORLD_SYNC:
             {
                 double h = r.f64();
@@ -828,6 +911,40 @@ int main(int argc, char** argv)
             script = 5;
             ByteWriter w; w.u8(HOST_ID); w.f32(0.f); s.send(MSG_FACTION_RELATION, w.data);
             printf("[bot] script: peace made\n");
+        }
+        // Town tests (game = host). In the host's world (before KMP_TEST_FAR): heavy hits on the town
+        // door from 20 s, once a second, until the host reports it broken. Far away (our own world):
+        // the test unique died here and the same building has all its doors broken.
+        {
+            static DWORD lastDoorHit = 0; static int doorHits = 0, farStep = 0;
+            WorldBuildingState ref; int door = 0, doors = 0;
+            bool haveDoor = townDoor(ref, door, doors);
+            if (connectedAt && haveDoor && since >= 20 && (farFrom < 0 || (int)since < farFrom - 2) && doorHits < 25 && now - lastDoorHit >= 1000)
+            {
+                lastDoorHit = now; ++doorHits;
+                BuildingDamageMsg d; d.door = (uint8_t)door; d.attackerNetId = makeNetId(1, 0); d.blunt = 500.f; d.cut = 500.f;
+                ByteWriter w; w.u8(HOST_ID); w.u8(0); ref.write(w); d.write(w);
+                s.send(MSG_WORLD_BUILDING_REPORT, w.data);
+                printf("[bot] town door hit %d sent (%s door %d)\n", doorHits, ref.sid.c_str(), door);
+            }
+            if (connectedAt && farFrom >= 0 && farStep == 0 && (int)since >= farFrom + 8)
+            {
+                farStep = 1;
+                std::string uq;
+                if (envStr("KMP_TEST_UNIQUE", uq))
+                {
+                    ByteWriter w; w.u8(HOST_ID); w.u16(1); w.str(uq); w.u8(0); w.u8(1);
+                    s.send(MSG_WORLD_STATE_REPORT, w.data);
+                    printf("[bot] own world: unique %s reported dead\n", uq.c_str());
+                }
+                if (haveDoor)
+                {
+                    ref.brokenDoors.assign(doors, 1);
+                    ByteWriter w; w.u8(HOST_ID); w.u8(1); w.u16(1); ref.write(w);
+                    s.send(MSG_WORLD_BUILDING_REPORT, w.data);
+                    printf("[bot] own world: %s reported with its %d door(s) broken\n", ref.sid.c_str(), doors);
+                }
+            }
         }
         if (!hitSent && now - t0 > 60000 && !hostChars.empty())
         {

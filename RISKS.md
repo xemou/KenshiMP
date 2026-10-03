@@ -40,7 +40,7 @@ Legend: ✅ handled (and how it is verified) · 🧪 coded and tested offline, *
 ## 3. World consistency
 | # | Problem | Status | Safeguard |
 |---|---|---|---|
-| 27 | Everyone has their own save, worlds diverge | 🟡 | Host's world shared (NPCs, clock); advice: clients on a fresh/dedicated game. ❌ Transfer of world town state. |
+| 27 | Everyone has their own save, worlds diverge | 🟡 | Host's world shared (NPCs, clock, weather, world states, town versions, broken town doors and destroyed town buildings - 🧪 `town_sync`); advice: clients on a fresh/dedicated game. A town changed in a client's own save but not in the host's world stays changed on that client (towns are never reverted, as in the base game). A client saving while connected keeps the host's world states in its save. |
 | 28 | Client damages their solo save | ✅ | Client saves redirected to `<name>_MP`. |
 | 29 | Ghosts stored in a save | ✅ | Purged on every load. |
 | 30 | Host reloads another save mid-session | ✅ | Detection, caches invalidated, purge, resync. Seen in game: loading a save with a player connected, no crash, ghost recreated. |
@@ -101,4 +101,4 @@ Legend: ✅ handled (and how it is verified) · 🧪 coded and tested offline, *
    an item on the ground at 45 s and answer the pickup).
 2. A real two-PC game over the Internet (VPN or port forwarding).
 3. Backpack contents (#39). UDP or relay depending on Internet feedback (#1, #5).
-4. Host migration (#13), transfer of world town state (#27).
+4. Host migration (#13). World towns (#27): to see in game.

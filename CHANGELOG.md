@@ -13,7 +13,9 @@ Summary of what the first public build contains (fill in the final protocol numb
 - Live ghosts of other players: movement (interpolated, no teleport in normal conditions), appearance,
   equipment, per-limb health, KO / death, combat animations, tasks, prosthetics, hunger
 - Damage authority model (attacker computes, victim's owner applies)
-- Shared host world: NPCs and animals around each player, clock, host-controlled pause, weather
+- Shared host world: NPCs and animals around each player, clock, host-controlled pause, weather,
+  world states of unique NPCs and the town changes they cause, town doors broken and town buildings
+  destroyed by any player (`town_sync`, protocol 16)
 - Buildings and towns replicated both ways
 - Items: bodies, chests, worn backpacks, ground items, traders' stock and money, direct trade between players
 - Multiplayer window (title screen / pause menu / F4), chat, players on the world map, English + French

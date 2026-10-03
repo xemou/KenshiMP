@@ -146,6 +146,7 @@ namespace
             else if (k == "ghost_no_collide") g_cfg.ghostNoCollide = toBool(v);
             else if (k == "load_sharing") g_cfg.loadSharing = toBool(v);
             else if (k == "assault_hostility") g_cfg.assaultHostility = toBool(v);
+            else if (k == "town_sync") g_cfg.townSync = toBool(v);
             else if (k == "autotest_load") g_cfg.autotestLoad = v;
             else if (k == "autotest") g_cfg.autotest = toBool(v);
             else if (k == "lobby_key")
@@ -350,6 +351,7 @@ namespace
         chars_resendAll();
         builds_resendAll();
         ground_resendAll();
+        towns_resendAll();
         if (ou && ou->player) sendFactionTable(true);
     }
 
@@ -377,6 +379,8 @@ namespace
         case MSG_BUILDING_STATE:
         case MSG_BUILDING_REMOVE:
         case MSG_BUILDING_DAMAGE:
+        case MSG_WORLD_BUILDINGS:
+        case MSG_WORLD_BUILDING_REPORT:
             builds_onMessage(e);
             break;
         case MSG_WORLD_SYNC:
@@ -384,6 +388,10 @@ namespace
             break;
         case MSG_WEATHER:
             weather_onMessage(e);
+            break;
+        case MSG_WORLD_STATES:
+        case MSG_WORLD_STATE_REPORT:
+            towns_onMessage(e);
             break;
         case MSG_GROUND_ITEM:
         case MSG_GROUND_REMOVE:
@@ -491,6 +499,7 @@ namespace
         g_playerFactions.clear();
         npcs_reset();
         world_reset();
+        towns_onWorldReload();
     }
 
     void handleEvent(const NetEvent& e)
@@ -703,6 +712,19 @@ namespace
         static bool hinted = false;
         if (!hinted && worldLoaded()) { hinted = true; if ((g_session.active() || g_cfg.mode == "join") && !g_ready) { showMessage(T("Connecting to the host...")); log("hint: 'Connecting to the host...' shown"); } else if (!g_session.active()) showMessage(TF("KenshiMP: %s = multiplayer window (host / join), Enter = chat.", g_cfg.lobbyKeyName.c_str())); }
 
+        // Test runs: targets for the town tests, once the world exists (connected or not).
+        // (10 s after the squad appears: the town around it is loaded by then)
+        static bool townTargets = false;
+        static DWORD worldSeenAt = 0;
+        if (g_cfg.autotest && !townTargets && worldLoaded() && !worldSeenAt) worldSeenAt = GetTickCount();
+        if (g_cfg.autotest && !townTargets && worldSeenAt && GetTickCount() - worldSeenAt > 10000)
+        {
+            townTargets = true;
+            log("autotest: town door %s", builds_debugTownDoor().c_str());
+            log("autotest: unique %s", towns_debugUnique().c_str());
+            log("autotest: town override %s", towns_debugOverride().c_str());
+        }
+
         // Events are drained even when the session just died, so the disconnect is handled.
         NetEvent e;
         while (g_session.pollEvent(e)) handleEvent(e);
@@ -846,6 +868,7 @@ namespace
         items_tick(now);
         trade_tick(now);
         weather_tick(now);
+        towns_tick(now);
         ground_tick(now);
 
         // Network diagnostics (F7 in game, log every 30 s): ping, bandwidth, ghosts.
@@ -958,6 +981,7 @@ void onWorldReload()
     items_onWorldReload();
     trade_onWorldReload();
     weather_onWorldReload();
+    towns_onWorldReload();
     ground_onWorldReload();
     chat_onWorldReload();
     builds_onWorldReload();
@@ -1112,5 +1136,6 @@ __declspec(dllexport) void startPlugin()
     if (!npcs_install()) ok = false;
     if (!items_install()) ok = false;
     weather_install();
+    towns_install();
     if (ok) DebugLog("KenshiMP: plugin loaded (mode=" + g_cfg.mode + ")");
 }

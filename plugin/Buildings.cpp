@@ -27,7 +27,11 @@
 #include "Shared.h"
 
 #include <map>
+#include <set>
 #include <vector>
+#include <algorithm>
+#include <math.h>
+#include <stdio.h>
 
 using namespace mp;
 
@@ -284,6 +288,14 @@ namespace
     }
 
     void applyIncomingDamage(const BuildingDamageMsg& d, uint8_t sender);
+
+    // World (town) buildings, defined at the end of the file.
+    std::vector<hand> g_worldDirty;          // touched by the engine since the last check (g_lock)
+    bool isWorldBuilding(Building* b);
+    void worldTick(DWORD now);
+    void worldOnMessage(const NetEvent& e);
+    void worldResendAll();
+    void worldReset();
 }
 
 uint32_t builds_netIdOf(Building* b)
@@ -317,11 +329,23 @@ Building* builds_findWorld(const std::string& sid, float x, float y, float z)
         float dd = list[i]->getPosition().distance(p);
         if (dd < bestD) { bestD = dd; best = list[i]; }
     }
+    if (best) return best;
+    // Town buildings are not all in that list (seen in game): look around the position instead.
+    lektor<RootObject*> around;
+    ou->getObjectsWithinSphere(around, p, 3.f, BUILDING, 64, NULL);
+    for (uint32_t i = 0; i < around.size(); ++i)
+    {
+        Building* b = static_cast<Building*>(around[i]);
+        if (!b || b->data != d) continue;
+        float dd = b->getPosition().distance(p);
+        if (dd < bestD) { bestD = dd; best = b; }
+    }
     return best;
 }
 
 void builds_tick(DWORD now)
 {
+    worldTick(now);
     if (!g_cfg.syncBuildings) return;
     ::builds_flushDismantle(false);
     std::vector<hand> rejected;
@@ -338,13 +362,14 @@ void builds_tick(DWORD now)
     }
 }
 
-void builds_resendAll() { g_forceFull = true; }
+void builds_resendAll() { g_forceFull = true; worldResendAll(); }
 
 // World reloaded: ghost buildings died with the old world (owners resend a full state every
 // 10 s). Local entries validate themselves by handle in sync(); the ones created while the
 // save loaded are already tracked by the factory hook.
 void builds_onWorldReload()
 {
+    worldReset();
     Lock l;
     g_ghosts.clear();
     g_forceFull = true;
@@ -381,6 +406,7 @@ void builds_purgeStale()
 
 void builds_onMessage(const NetEvent& e)
 {
+    if (e.msgType == MSG_WORLD_BUILDINGS || e.msgType == MSG_WORLD_BUILDING_REPORT) { worldOnMessage(e); return; }
     if (!g_cfg.syncBuildings) return;
     ByteReader r(e.body);
     if (e.msgType == MSG_BUILDING_STATE)
@@ -517,8 +543,45 @@ HitMaterialType doorHit_hook(DoorStuff* self, CutDirection dir, Damages& dmg, Ch
             Damages none(0, 0, 0, 0, 0);
             return doorHit_orig(self, dir, none, who, attack, combo);
         }
+        // Door of a town: whoever simulates that place breaks it (the host, or a client in its own
+        // world); a hit from our character in the host's world is forwarded to the host.
+        if (g_cfg.townSync && !parentGhost && isWorldBuilding(self->parent))
+        {
+            bool sharedClient = !g_session.isHost() && !npcs_ownWorld();
+            if (sharedClient && !attackerGhost && chars_netIdOf(who))
+            {
+                WorldBuildingState ref; ref.sid = self->parent->data->stringID;
+                Ogre::Vector3 p = self->parent->getPosition(); ref.x = p.x; ref.y = p.y; ref.z = p.z;
+                BuildingDamageMsg d; d.door = 0xFF;
+                for (uint32_t i = 0; i < self->parent->doors.size(); ++i) if (self->parent->doors[i] == self) { d.door = (uint8_t)i; break; }
+                d.attackerNetId = chars_netIdOf(who);
+                d.cut = dmg.cut; d.blunt = dmg.blunt; d.pierce = dmg.pierce;
+                ByteWriter w; w.u8(HOST_ID); w.u8(0); ref.write(w); d.write(w);
+                g_session.sendTo(HOST_ID, MSG_WORLD_BUILDING_REPORT, w.data);
+            }
+            if (attackerGhost || sharedClient)
+            {
+                Damages none(0, 0, 0, 0, 0);
+                return doorHit_orig(self, dir, none, who, attack, combo);
+            }
+        }
     }
     return doorHit_orig(self, dir, dmg, who, attack, combo);
+}
+
+// --- hooks: DoorStuff::setBroken, Building::setDestroyed -------------------------------------
+// Only note which town building changed; the main loop reads and sends its state.
+void (*doorSetBroken_orig)(DoorStuff*, bool) = NULL;
+void doorSetBroken_hook(DoorStuff* self, bool on)
+{
+    doorSetBroken_orig(self, on);
+    if (g_cfg.townSync && self && self->parent && ready()) { Lock l; g_worldDirty.push_back(hand(self->parent)); }
+}
+void (*setDestroyed_orig)(Building*, bool) = NULL;
+void setDestroyed_hook(Building* self, bool d)
+{
+    setDestroyed_orig(self, d);
+    if (g_cfg.townSync && self && ready()) { Lock l; g_worldDirty.push_back(hand(self)); }
 }
 
 namespace kmp { namespace {
@@ -578,6 +641,324 @@ bool builds_install()
     if (KenshiLib::SUCCESS != KenshiLib::AddHook(KenshiLib::GetRealAddress(&DoorStuff::_NV_hitByMeleeAttack),
                                                  doorHit_hook, &doorHit_orig))
     { ErrorLog("KenshiMP: could not hook DoorStuff::hitByMeleeAttack!"); ok = false; }
+    if (KenshiLib::SUCCESS != KenshiLib::AddHook(KenshiLib::GetRealAddress(&DoorStuff::_NV_setBroken), doorSetBroken_hook, &doorSetBroken_orig))
+        log("hook DoorStuff::setBroken failed (town doors not synced)");
+    if (KenshiLib::SUCCESS != KenshiLib::AddHook(KenshiLib::GetRealAddress(&Building::_NV_setDestroyed), setDestroyed_hook, &setDestroyed_orig))
+        log("hook Building::setDestroyed failed (destroyed town buildings not synced)");
     return ok;
+}
+}
+
+// --- World (town) buildings ------------------------------------------------------------------
+// Doors broken / repaired and buildings destroyed in towns follow whoever simulates the place:
+//  Host   : buildings touched by the engine (setBroken / setDestroyed hooks) are read every second;
+//           a changed one goes to everybody (MSG_WORLD_BUILDINGS) and stays in a table that is
+//           sent again on join / resync. Hits forwarded by clients are applied here for real.
+//  Client : in the host's world, hits of our characters on town doors go to the host and do no
+//           damage here; the host's table is applied to our copies of those buildings (now, or
+//           when they load). In our own world (load sharing) we break doors ourselves and report
+//           the resulting states to the host, which adopts them (applied when it loads the place).
+namespace kmp { namespace {
+    const DWORD WORLD_CHECK_MS = 1000, WORLD_RETRY_MS = 3000;
+    const float WORLD_APPLY_RANGE = 2500.f;   // client: only buildings around our characters are looked up
+    const size_t MAX_WORLD = 4096;
+
+    struct WorldEntry
+    {
+        WorldBuildingState st;
+        hand h;                 // our copy once found
+        bool pending;           // to (re)apply to our copy
+        WorldEntry() : pending(true) {}
+    };
+    std::map<std::string, WorldEntry> g_world;   // host: authoritative table; client: the host's
+    DWORD g_lastWorldCheck = 0, g_lastWorldRetry = 0;
+    bool g_worldFull = false;
+
+    bool sharedClient() { return !g_session.isHost() && !npcs_ownWorld(); }
+
+    std::string worldKey(const WorldBuildingState& s)
+    {
+        char buf[96];
+        sprintf_s(buf, "@%d,%d,%d", (int)floorf(s.x + 0.5f), (int)floorf(s.y + 0.5f), (int)floorf(s.z + 0.5f));
+        return s.sid + buf;
+    }
+
+    bool isWorldBuildingInner(Building* b)
+    {
+        __try { return b->data && !b->isFurnitureOrDoor() && !b->data->stringID.empty(); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    bool isWorldBuilding(Building* b)
+    {
+        return b && !ghostIdOf(b) && !localIdOf(b) && isWorldBuildingInner(b);
+    }
+
+    bool captureWorldInner(Building* b, WorldBuildingState* s)
+    {
+        __try
+        {
+            if (!b->data) return false;
+            s->sid = b->data->stringID;
+            Ogre::Vector3 p = b->getPosition(); s->x = p.x; s->y = p.y; s->z = p.z;
+            s->destroyed = b->isDestroyed() ? 1 : 0;
+            s->brokenDoors.clear();
+            for (uint32_t i = 0; i < b->doors.size() && i < 64; ++i)
+            {
+                DoorStuff* d = doorAt(b, i);
+                s->brokenDoors.push_back(d && d->isBroken() ? 1 : 0);
+            }
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    bool captureWorld(Building* b, WorldBuildingState& s) { return captureWorldInner(b, &s) && !s.sid.empty(); }
+
+    bool applyWorldInner(Building* b, const WorldBuildingState* s)
+    {
+        __try
+        {
+            if ((b->isDestroyed() ? 1 : 0) != s->destroyed) b->setDestroyed(s->destroyed != 0);
+            for (uint32_t i = 0; i < b->doors.size() && i < s->brokenDoors.size(); ++i)
+                if (DoorStuff* d = doorAt(b, i))
+                    if (d->isBroken() != (s->brokenDoors[i] != 0)) d->setBroken(s->brokenDoors[i] != 0);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    bool applyWorld(Building* b, const WorldBuildingState& s)
+    {
+        g_applyingSync = true;
+        bool ok = applyWorldInner(b, &s);
+        g_applyingSync = false;
+        return ok;
+    }
+
+    void sendStates(uint8_t msg, const std::vector<WorldBuildingState>& list)
+    {
+        const size_t PER_MSG = 300;
+        for (size_t start = 0; start < list.size(); start += PER_MSG)
+        {
+            size_t end = start + PER_MSG < list.size() ? start + PER_MSG : list.size();
+            ByteWriter w;
+            if (msg == MSG_WORLD_BUILDING_REPORT) { w.u8(HOST_ID); w.u8(1); }
+            w.u16((uint16_t)(end - start));
+            for (size_t k = start; k < end; ++k) list[k].write(w);
+            if (msg == MSG_WORLD_BUILDING_REPORT) g_session.sendTo(HOST_ID, msg, w.data);
+            else g_session.send(msg, w.data);
+        }
+    }
+
+    // Host / own-world client: the buildings the engine touched -> changed states.
+    void collectDirty(std::vector<WorldBuildingState>& changed)
+    {
+        std::vector<hand> dirty;
+        { Lock l; dirty.swap(g_worldDirty); }
+        if (sharedClient()) return;   // the host decides for the place we are in
+        std::set<Building*> seen;
+        for (size_t i = 0; i < dirty.size(); ++i)
+        {
+            Building* b = dirty[i].getBuilding();
+            if (!b || !seen.insert(b).second || !isWorldBuilding(b)) continue;
+            WorldBuildingState s;
+            if (!captureWorld(b, s)) continue;
+            std::string key = worldKey(s);
+            std::map<std::string, WorldEntry>::iterator it = g_world.find(key);
+            if (it == g_world.end())
+            {
+                bool pristine = !s.destroyed;
+                for (size_t k = 0; k < s.brokenDoors.size(); ++k) if (s.brokenDoors[k]) pristine = false;
+                if (pristine || g_world.size() >= MAX_WORLD) continue;   // nothing worth remembering
+                it = g_world.insert(std::make_pair(key, WorldEntry())).first;
+            }
+            else if (it->second.st.sameState(s)) continue;
+            it->second.st = s; it->second.h = hand(b); it->second.pending = false;
+            changed.push_back(s);
+            log("town building %s changed here: %s, %d broken door(s)", s.sid.c_str(), s.destroyed ? "destroyed" : "standing",
+                (int)std::count(s.brokenDoors.begin(), s.brokenDoors.end(), 1));
+        }
+    }
+
+    // Applies the table to our copies of those buildings (loaded ones; clients: around us).
+    void applyPending(bool enforceAll)
+    {
+        std::vector<Ogre::Vector3> around;
+        if (!g_session.isHost())
+        {
+            std::vector<std::pair<uint32_t, Character*> > mine;
+            chars_localCharacters(mine);
+            for (size_t i = 0; i < mine.size(); ++i) if (mine[i].second) around.push_back(mine[i].second->getPosition());
+            if (around.empty()) return;
+        }
+        int lookups = 0;
+        for (std::map<std::string, WorldEntry>::iterator it = g_world.begin(); it != g_world.end(); ++it)
+        {
+            WorldEntry& e = it->second;
+            Building* b = e.h.getBuilding();
+            if (!b) e.pending = true;                       // unloaded since: its zone may come back with the old state
+            if (!e.pending && !enforceAll) continue;
+            if (!around.empty())
+            {
+                Ogre::Vector3 p(e.st.x, e.st.y, e.st.z);
+                bool inRange = false;
+                for (size_t i = 0; i < around.size() && !inRange; ++i) inRange = around[i].squaredDistance(p) < WORLD_APPLY_RANGE * WORLD_APPLY_RANGE;
+                if (!inRange) continue;
+            }
+            if (!b)
+            {
+                if (++lookups > 40) break;                  // the rest at the next retry
+                b = builds_findWorld(e.st.sid, e.st.x, e.st.y, e.st.z);
+                if (!b) continue;
+                e.h = hand(b);
+            }
+            WorldBuildingState cur;
+            if (captureWorld(b, cur) && !cur.sameState(e.st) && applyWorld(b, e.st))
+                log("town building %s: %s, doors %s, as in %s", e.st.sid.c_str(), e.st.destroyed ? "destroyed" : "standing",
+                    std::count(e.st.brokenDoors.begin(), e.st.brokenDoors.end(), 1) ? "broken" : "intact",
+                    g_session.isHost() ? "a player's world" : "the host's world");
+            e.pending = false;
+        }
+    }
+
+    void worldTick(DWORD now)
+    {
+        if (!g_cfg.townSync || !ready()) { Lock l; g_worldDirty.clear(); return; }
+        if (now - g_lastWorldCheck >= WORLD_CHECK_MS || g_worldFull)
+        {
+            g_lastWorldCheck = now;
+            std::vector<WorldBuildingState> changed;
+            collectDirty(changed);
+            if (g_session.isHost())
+            {
+                if (g_worldFull)
+                {
+                    changed.clear();
+                    for (std::map<std::string, WorldEntry>::iterator it = g_world.begin(); it != g_world.end(); ++it) changed.push_back(it->second.st);
+                }
+                if (!changed.empty()) sendStates(MSG_WORLD_BUILDINGS, changed);
+            }
+            else if (!changed.empty())
+            {
+                sendStates(MSG_WORLD_BUILDING_REPORT, changed);
+                log("town buildings: %u changes in our own world reported to the host", (unsigned)changed.size());
+            }
+            g_worldFull = false;
+        }
+        if (now - g_lastWorldRetry >= WORLD_RETRY_MS)
+        {
+            g_lastWorldRetry = now;
+            applyPending(sharedClient());   // in the host's world, our copies always follow its table
+        }
+    }
+
+    // Host: a client's character hit a town door.
+    void applyForwardedHit(const WorldBuildingState& ref, const BuildingDamageMsg& d, uint8_t sender)
+    {
+        Building* b = builds_findWorld(ref.sid, ref.x, ref.y, ref.z);
+        if (!b || !isWorldBuilding(b))
+        {
+            static DWORD warn = 0;
+            if (GetTickCount() - warn > 5000) { warn = GetTickCount(); log("town door hit from %s: building %s not loaded here", playerName(sender).c_str(), ref.sid.c_str()); }
+            return;
+        }
+        DoorStuff* door = d.door == 0xFF ? NULL : doorAt(b, d.door);
+        if (!door) return;
+        Damages dmg(d.cut, d.blunt, d.pierce, 0, 0);
+        bool ok = false;
+        g_applyingSync = true;
+        safeDoorHit(door, &dmg, chars_byNetId(d.attackerNetId), &ok);
+        g_applyingSync = false;
+        if (!ok) log("town door hit from %s failed", playerName(sender).c_str());
+    }
+
+    // Received states -> table (true if that entry changed).
+    bool storeState(const WorldBuildingState& s)
+    {
+        std::string key = worldKey(s);
+        if (!g_world.count(key) && g_world.size() >= MAX_WORLD) return false;
+        WorldEntry& w = g_world[key];
+        if (!w.st.sid.empty() && w.st.sameState(s)) return false;
+        w.st = s; w.pending = true;
+        return true;
+    }
+
+    void worldOnMessage(const NetEvent& e)
+    {
+        if (!g_cfg.townSync) return;
+        ByteReader r(e.body);
+        if (e.msgType == MSG_WORLD_BUILDINGS)
+        {
+            if (g_session.isHost() || e.sender != HOST_ID) return;
+            uint16_t n = r.u16();
+            if (!r.ok() || n > MAX_WORLD) return;
+            for (uint16_t i = 0; i < n && r.ok(); ++i)
+            {
+                WorldBuildingState s; s.read(r);
+                if (r.ok() && s.sanitize()) storeState(s);
+            }
+            applyPending(false);
+            return;
+        }
+        // MSG_WORLD_BUILDING_REPORT (host only)
+        if (!g_session.isHost()) return;
+        uint8_t target = r.u8(), kind = r.u8();
+        if (!r.ok() || target != HOST_ID) return;
+        if (kind == 0)
+        {
+            WorldBuildingState ref; ref.read(r);
+            BuildingDamageMsg d; d.read(r); d.sanitize();
+            if (r.ok() && ref.sanitize() && !npcs_clientOwnWorld(e.sender)) applyForwardedHit(ref, d, e.sender);
+        }
+        else if (kind == 1)
+        {
+            if (!npcs_clientOwnWorld(e.sender)) { log("town buildings from %s ignored (it is in the host's world)", playerName(e.sender).c_str()); return; }
+            uint16_t n = r.u16();
+            if (!r.ok() || n > MAX_WORLD) return;
+            std::vector<WorldBuildingState> adopted;
+            for (uint16_t i = 0; i < n && r.ok(); ++i)
+            {
+                WorldBuildingState s; s.read(r);
+                if (r.ok() && s.sanitize() && storeState(s)) adopted.push_back(s);
+            }
+            if (!adopted.empty())
+            {
+                log("town buildings: %u changes from %s's world adopted", (unsigned)adopted.size(), playerName(e.sender).c_str());
+                applyPending(false);            // now if we have that place loaded, else when we load it
+                sendStates(MSG_WORLD_BUILDINGS, adopted);
+            }
+        }
+    }
+
+    void worldResendAll() { if (g_session.isHost()) g_worldFull = true; }
+
+    void worldReset()
+    {
+        g_world.clear();
+        { Lock l; g_worldDirty.clear(); }
+        g_worldFull = g_session.isHost();
+    }
+} }
+
+namespace kmp {
+// Test (autotest): nearest town building with doors around our first character, as
+// "sid;x;y;z;door;doorCount" (what the test bot needs to hit it), "" if none.
+std::string builds_debugTownDoor()
+{
+    if (!ou || !ou->player || ou->player->playerCharacters.size() == 0) return "";
+    Ogre::Vector3 me = ou->player->playerCharacters[0]->getPosition();
+    lektor<RootObject*> list;
+    ou->getObjectsWithinSphere(list, me, 600.f, BUILDING, 400, NULL);
+    Building* best = NULL; float bestD = 1e30f;
+    for (uint32_t i = 0; i < list.size(); ++i)
+    {
+        Building* b = static_cast<Building*>(list[i]);
+        if (!b || !isWorldBuilding(b) || b->doors.size() == 0 || !doorAt(b, 0) || doorAt(b, 0)->isBroken()) continue;
+        float d = b->getPosition().squaredDistance(me);
+        if (d < bestD) { bestD = d; best = b; }
+    }
+    if (!best) return "";
+    Ogre::Vector3 p = best->getPosition();
+    char buf[256];
+    sprintf_s(buf, "%s;%.2f;%.2f;%.2f;0;%u", best->data->stringID.c_str(), p.x, p.y, p.z, (unsigned)best->doors.size());
+    return buf;
 }
 }

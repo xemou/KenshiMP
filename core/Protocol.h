@@ -16,7 +16,7 @@
 
 namespace mp {
 
-const uint32_t PROTOCOL_VERSION = 14;
+const uint32_t PROTOCOL_VERSION = 16;
 
 // World NPCs replicated by the host use the upper half of the host's local id space.
 const uint32_t NPC_ID_FLAG = 0x800000;
@@ -63,7 +63,11 @@ enum MsgType
     MSG_TRADE,            // u8 targetPlayer, u8 action (0 request, 1 accept, 2 end), u32 senderChar, u32 targetChar
     MSG_ITEM_UNDO,        // u8 targetPlayer, u8 action (UNDO_*), u8 kind (CONTAINER_*), u32 netId, InvItem : the owner refused that transfer
     MSG_ZONE_MODE,        // h->c u8 targetPlayer, u8 shared : 1 = the host simulates the world around you, 0 = you do (far from the host)
-    MSG_SHOT              // u32 shooterNetId, TargetRef target, u8 stat, f32 aimX, aimY, aimZ : that character fired (its ghosts fire too, harmlessly)
+    MSG_SHOT,             // u32 shooterNetId, TargetRef target, u8 stat, f32 aimX, aimY, aimZ : that character fired (its ghosts fire too, harmlessly)
+    MSG_WORLD_STATES,     // h->c u16 n, {str uniqueNpcSid, u8 state (0 dead, 1 alive, 2 imprisoned), u8 playerInvolved}*, u16 m, {str townSid, str replacementTownSid}*
+    MSG_WORLD_STATE_REPORT, // c->h u8 HOST_ID, then the states part of MSG_WORLD_STATES : changes in a client's own world (load sharing)
+    MSG_WORLD_BUILDINGS,  // h->c u16 n, WorldBuildingState* : town buildings broken / repaired / destroyed in the host's world
+    MSG_WORLD_BUILDING_REPORT // c->h u8 HOST_ID, u8 kind: 0 = hit (WorldBuildingState with no doors, BuildingDamageMsg), 1 = u16 n, WorldBuildingState* (client's own world)
 };
 
 inline bool isRelayed(uint8_t t) { return t >= MSG_ENTITY_STATE; }
@@ -198,6 +202,30 @@ struct BuildingDamageMsg
         cut = clampF(cut, 0, MAX_HIT); blunt = clampF(blunt, 0, MAX_HIT); pierce = clampF(pierce, 0, MAX_HIT);
         dismantle = clampF(dismantle, -MAX_HIT, MAX_HIT);
     }
+};
+
+// A building of the world (town, outpost... not a player's): identified by its FCS id and position
+// (the same on every machine), state = destroyed flag and broken flag of each door.
+struct WorldBuildingState
+{
+    std::string sid;
+    float x, y, z;
+    uint8_t destroyed;
+    std::vector<uint8_t> brokenDoors;   // 0 / 1 per door, the building's door order
+
+    WorldBuildingState() : x(0), y(0), z(0), destroyed(0) {}
+    void write(ByteWriter& w) const
+    {
+        w.str(sid); w.f32(x); w.f32(y); w.f32(z); w.u8(destroyed);
+        w.u8((uint8_t)brokenDoors.size()); for (size_t k = 0; k < brokenDoors.size(); ++k) w.u8(brokenDoors[k]);
+    }
+    void read(ByteReader& r)
+    {
+        sid = r.str(); x = r.f32(); y = r.f32(); z = r.f32(); destroyed = r.u8();
+        uint8_t n = r.u8(); brokenDoors.clear(); for (int k = 0; k < n && r.ok(); ++k) brokenDoors.push_back(r.u8() ? 1 : 0);
+    }
+    bool sanitize() { if (destroyed) destroyed = 1; return !sid.empty() && validPos(x, y, z); }
+    bool sameState(const WorldBuildingState& o) const { return destroyed == o.destroyed && brokenDoors == o.brokenDoors; }
 };
 
 enum EntityKind { KIND_CHARACTER = 0, KIND_ANIMAL = 1, KIND_BUILDING = 2 };

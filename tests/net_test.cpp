@@ -752,6 +752,54 @@ int main()
         CHECK(!waitEvent(host, NetEvent::EV_MESSAGE, none, 300, MSG_DAMAGE));   // host not involved
     }
 
+    // World states: a client's report goes to the host only; the host's table reaches everybody.
+    {
+        ByteWriter w; w.u8(HOST_ID); w.u16(1); w.str("1234-gamedata.base"); w.u8(0); w.u8(1);
+        b.send(MSG_WORLD_STATE_REPORT, w.data);
+        NetEvent got, none;
+        CHECK(waitEvent(host, NetEvent::EV_MESSAGE, got, 3000, MSG_WORLD_STATE_REPORT));
+        CHECK(got.sender == 2);
+        ByteReader r(got.body);
+        CHECK(r.u8() == HOST_ID && r.u16() == 1 && r.str() == "1234-gamedata.base" && r.u8() == 0 && r.u8() == 1 && r.ok());
+        CHECK(!waitEvent(a, NetEvent::EV_MESSAGE, none, 300, MSG_WORLD_STATE_REPORT));   // Bob not involved
+
+        ByteWriter t; t.u16(0); t.u16(1); t.str("town-a"); t.str("town-a-ruins");
+        host.send(MSG_WORLD_STATES, t.data);
+        NetEvent ea, eb;
+        CHECK(waitEvent(a, NetEvent::EV_MESSAGE, ea, 3000, MSG_WORLD_STATES));
+        CHECK(waitEvent(b, NetEvent::EV_MESSAGE, eb, 3000, MSG_WORLD_STATES));
+        CHECK(ea.sender == HOST_ID && eb.sender == HOST_ID);
+        ByteReader rt(eb.body);
+        CHECK(rt.u16() == 0 && rt.u16() == 1 && rt.str() == "town-a" && rt.str() == "town-a-ruins" && rt.ok());
+    }
+
+    // Town buildings: a client's door hit goes to the host only; the host's states reach everybody.
+    {
+        WorldBuildingState ref; ref.sid = "gate-1"; ref.x = 100.f; ref.y = 5.f; ref.z = -20.f;
+        BuildingDamageMsg d; d.door = 2; d.attackerNetId = makeNetId(2, 1); d.blunt = 30.f;
+        ByteWriter w; w.u8(HOST_ID); w.u8(0); ref.write(w); d.write(w);
+        b.send(MSG_WORLD_BUILDING_REPORT, w.data);
+        NetEvent got, none;
+        CHECK(waitEvent(host, NetEvent::EV_MESSAGE, got, 3000, MSG_WORLD_BUILDING_REPORT));
+        ByteReader r(got.body);
+        CHECK(r.u8() == HOST_ID && r.u8() == 0);
+        WorldBuildingState ref2; ref2.read(r); BuildingDamageMsg d2; d2.read(r);
+        CHECK(r.ok() && ref2.sanitize() && ref2.sid == "gate-1" && ref2.x == 100.f && d2.door == 2 && d2.blunt == 30.f);
+        CHECK(!waitEvent(a, NetEvent::EV_MESSAGE, none, 300, MSG_WORLD_BUILDING_REPORT));
+
+        WorldBuildingState st = ref; st.destroyed = 0; st.brokenDoors.push_back(0); st.brokenDoors.push_back(1);
+        ByteWriter t; t.u16(1); st.write(t);
+        host.send(MSG_WORLD_BUILDINGS, t.data);
+        NetEvent ea, eb;
+        CHECK(waitEvent(a, NetEvent::EV_MESSAGE, ea, 3000, MSG_WORLD_BUILDINGS));
+        CHECK(waitEvent(b, NetEvent::EV_MESSAGE, eb, 3000, MSG_WORLD_BUILDINGS));
+        ByteReader rt(eb.body);
+        WorldBuildingState back;
+        CHECK(rt.u16() == 1); back.read(rt);
+        CHECK(rt.ok() && back.sameState(st) && back.brokenDoors.size() == 2 && back.brokenDoors[1] == 1);
+        WorldBuildingState bad; bad.sid = "x"; bad.x = 1e30f; CHECK(!bad.sanitize());
+    }
+
     // Item transfer: Carol loots one of Bob's characters -> only Bob gets it.
     {
         InvItem it; it.item = "katana"; it.manufacturer = "smith"; it.material = "steel"; it.quantity = 1; it.quality = 42.f;

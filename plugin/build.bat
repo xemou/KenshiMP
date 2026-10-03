@@ -19,7 +19,7 @@ if not exist out mkdir out
 rem /GL + /LTCG (whole program optimisation) are REQUIRED: without them &Class::method yields a
 rem thunk inside our DLL and KenshiLib::GetRealAddress() rejects it.
 cl /nologo /c /O2 /GL /MD /EHsc /W3 /Zi /DNDEBUG /D_WINDOWS /D_USRDLL /DUNICODE /D_UNICODE ^
-   /Foout\ /Fdout\KenshiMP_cl.pdb KenshiMP.cpp Characters.cpp Buildings.cpp World.cpp Npcs.cpp Items.cpp Weather.cpp Chat.cpp Lobby.cpp Ground.cpp Lang.cpp Trade.cpp Steam.cpp ..\core\Session.cpp ..\core\Tunnel.cpp || exit /b 1
+   /Foout\ /Fdout\KenshiMP_cl.pdb KenshiMP.cpp Characters.cpp Buildings.cpp World.cpp Npcs.cpp Items.cpp Weather.cpp Chat.cpp Lobby.cpp Ground.cpp Lang.cpp Trade.cpp Steam.cpp Towns.cpp ..\core\Session.cpp ..\core\Tunnel.cpp || exit /b 1
 link /nologo /DLL /LTCG /DEBUG /OPT:REF /OPT:ICF /OUT:out\KenshiMP.dll /PDB:out\KenshiMP.pdb ^
-   out\KenshiMP.obj out\Characters.obj out\Buildings.obj out\World.obj out\Npcs.obj out\Items.obj out\Weather.obj out\Chat.obj out\Lobby.obj out\Ground.obj out\Lang.obj out\Trade.obj out\Steam.obj out\Session.obj out\Tunnel.obj KenshiLib.lib OgreMain_x64.lib MyGUIEngine_x64.lib ws2_32.lib user32.lib advapi32.lib || exit /b 1
+   out\KenshiMP.obj out\Characters.obj out\Buildings.obj out\World.obj out\Npcs.obj out\Items.obj out\Weather.obj out\Chat.obj out\Lobby.obj out\Ground.obj out\Lang.obj out\Trade.obj out\Steam.obj out\Towns.obj out\Session.obj out\Tunnel.obj KenshiLib.lib OgreMain_x64.lib MyGUIEngine_x64.lib ws2_32.lib user32.lib advapi32.lib || exit /b 1
 echo Built %~dp0out\KenshiMP.dll

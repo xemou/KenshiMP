@@ -497,6 +497,14 @@ void npcs_reset()
     g_zoneMode = MODE_UNKNOWN;
 }
 
+bool npcs_ownWorld() { return g_session.active() && !g_session.isHost() && g_zoneMode == MODE_APART; }
+
+bool npcs_clientOwnWorld(uint8_t client)
+{
+    std::map<uint8_t, int>::iterator m = g_clientMode.find(client);
+    return m != g_clientMode.end() && m->second == MODE_APART;
+}
+
 void npcs_onZoneMode(const NetEvent& e)
 {
     ByteReader r(e.body);

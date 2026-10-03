@@ -84,6 +84,7 @@ Everything can also be set by hand in `kenshimp.cfg`:
 | strict_mods | 1 | refuse players whose mods differ |
 | auto_reconnect | 1 | automatic client reconnect |
 | weather_sync | 1 | the host's weather is imposed on everyone |
+| town_sync | 1 | the host's world states (unique NPCs killed / jailed) and the town changes they cause (destroyed, abandoned, taken) apply to everyone; a changed town shows its new version when its area loads; town doors broken or repaired and town buildings destroyed by anyone are the same for everyone |
 | lobby_key | F4 | Multiplayer window key (F1…F12; F6 is taken by the CheatMenu mod) |
 | language | auto | mod language: auto (the game's), fr or en |
 | show_players_on_map | 1 | other players' squads on the world map (except when at war) |
