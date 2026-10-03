@@ -145,6 +145,8 @@ namespace
             else if (k == "tune_onscreen") g_cfg.tuneOnScreen = toBool(v);
             else if (k == "ghost_no_collide") g_cfg.ghostNoCollide = toBool(v);
             else if (k == "load_sharing") g_cfg.loadSharing = toBool(v);
+            else if (k == "autotest_load") g_cfg.autotestLoad = v;
+            else if (k == "autotest") g_cfg.autotest = toBool(v);
             else if (k == "lobby_key")
             {
                 // F1..F12
@@ -537,6 +539,44 @@ namespace
     }
     bool safeLoadSave(const std::string& name) { return safeLoadSaveInner(&name); }
 
+    // ---------------------------------------------------------------- automatic test run
+    // autotest=1: once another player (the test bot) is in the session, run the checks that
+    // otherwise need the debug keys, without any keyboard or mouse input (the game can stay in
+    // the background). Every result is logged as "autotest: ...".
+    void autotestTick(DWORD now)
+    {
+        static DWORD t0 = 0;
+        static int step = 0;
+        if (!g_cfg.autotest || step < 0) return;
+        uint8_t other = 0; bool found = false;
+        for (std::map<uint8_t, PlayerInfo>::iterator it = g_players.begin(); it != g_players.end(); ++it)
+            if (it->first != g_session.localId()) { other = it->first; found = true; break; }
+        if (!found) return;
+        if (!t0) { t0 = now; log("autotest: start (other player %d)", (int)other); }
+        DWORD s = (now - t0) / 1000;
+        std::vector<std::pair<uint32_t, Character*> > locals;
+        chars_localCharacters(locals);
+        Character* me = locals.empty() ? NULL : locals[0].second;
+        if (!me) return;
+        if (step == 0 && s >= 2)
+        {
+            step = 1;
+            std::string p = configPath();
+            log("autotest: settings file %s exists=%d", p.c_str(), (int)fileExists(p));
+        }
+        if (step == 1 && s >= 4)  { step = 11; log("autotest: one item for the race -> %s", items_debugGiveOne(me).c_str()); }
+        if (step == 11 && s >= 6)  { step = 12; log("autotest: crossbow -> %s", items_debugEquipCrossbow(me).c_str()); }
+        if (step == 12 && s >= 8)  { step = 2; trade_request(other); log("autotest: trade requested"); }
+        if (step == 2 && s >= 12) { step = 3; log("autotest: trade loot -> %s", items_debugLoot(me).c_str()); }
+        if (step == 3 && s >= 15) { step = 4; trade_endAll(); }
+        if (step == 4 && s >= 17) { step = 5; log("autotest: backpack take -> %s", items_debugBackpack(me).c_str()); }
+        if (step == 5 && s >= 25) { step = 51; builds_debugSpawn(); log("autotest: test building placed"); }
+        if (step == 51 && s >= 56) { step = 6; log("autotest: ground pickup -> %s", ground_debugPickup(me).c_str()); }
+        if (step == 6 && s >= 60) { step = 7; log("autotest: bag given -> %s", ground_debugGiveBag(me).c_str()); }
+        if (step == 7 && s >= 63) { step = 8; log("autotest: bag dropped -> %s", ground_debugDropBag(me).c_str()); }
+        if (step == 8 && s >= 95) { step = -1; chars_logHitStats(); log("autotest: done"); }
+    }
+
     bool gameFocused()
     {
         HWND w = GetForegroundWindow();
@@ -606,7 +646,7 @@ namespace
     {
         if (!ou || !ou->player) return;
         static bool hinted = false;
-        if (!hinted && worldLoaded()) { hinted = true; if (g_session.active() && !g_ready) showMessage(T("Connecting to the host...")); if (!g_session.active()) showMessage(TF("KenshiMP: %s = multiplayer window (host / join), Enter = chat.", g_cfg.lobbyKeyName.c_str())); }
+        if (!hinted && worldLoaded()) { hinted = true; if ((g_session.active() || g_cfg.mode == "join") && !g_ready) { showMessage(T("Connecting to the host...")); log("hint: 'Connecting to the host...' shown"); } else if (!g_session.active()) showMessage(TF("KenshiMP: %s = multiplayer window (host / join), Enter = chat.", g_cfg.lobbyKeyName.c_str())); }
 
         // Events are drained even when the session just died, so the disconnect is handled.
         NetEvent e;
@@ -649,6 +689,7 @@ namespace
         if (keyPressed(VK_F11, f11) && g_cfg.debugKeys) builds_debugSpawn();
         static bool f8 = false;
         if (keyPressed(VK_F8, f8) && g_cfg.debugKeys) world_debugShift();
+        autotestTick(GetTickCount());
         // F6 (debug): trade with the first other player (ask, or accept their offer).
         static bool f6 = false;
         if (keyPressed(VK_F6, f6) && g_cfg.debugKeys)
@@ -726,6 +767,13 @@ namespace
                 ou->gamedata.getDataOfType(limbs, LIMB_REPLACEMENT);
                 for (uint32_t i = 0; i < limbs.size() && i < 6; ++i)
                     if (limbs[i]) log("prosthetic available: %s (%s)", limbs[i]->stringID.c_str(), limbs[i]->name.c_str());
+                lektor<GameData*> bows;
+                ou->gamedata.getDataOfType(bows, CROSSBOW);
+                int shown = 0;
+                for (int pass = 0; pass < 2; ++pass)   // base game ones first (mods' may not fit a ghost)
+                    for (uint32_t i = 0; i < bows.size() && shown < 3; ++i)
+                        if (bows[i] && (bows[i]->stringID.find("gamedata.base") != std::string::npos) == (pass == 0))
+                        { log("crossbow available: %s (%s)", bows[i]->stringID.c_str(), bows[i]->name.c_str()); ++shown; }
                 lektor<GameData*> packs;
                 ou->gamedata.getDataOfType(packs, CONTAINER);
                 for (uint32_t i = 0; i < packs.size(); ++i)
@@ -892,21 +940,78 @@ namespace kmp { namespace {
     }
 } }
 void (*titleUpdate_orig)(TitleScreen*) = NULL;
+// Test runs: get into a game without any mouse or keyboard input, by pressing the game's own
+// buttons by name (as a click would). autotest_load=new: NEW GAME, BEGIN (default start), then
+// CONFIRM in the character editor. Any other value: CONTINUE (the test script points settings.cfg's
+// "continue" at the test save). Loading a save directly from the title screen crashes the game:
+// these buttons prepare the world first.
+static void autotestClicks()
+{
+    static int step = 0;
+    static DWORD last = 0, started = 0;
+    if (g_cfg.autotestLoad.empty() || step < 0) return;
+    DWORD now = GetTickCount();
+    if (!started) started = now;
+    if (now - started < 5000 || now - last < 1000) return;
+    last = now;
+    static const char* const newGame[] = { "NewGameButton", "BeginButton", "ConfirmButton" };
+    static const char* const resume[] = { "ContinueButton" };
+    bool fresh = g_cfg.autotestLoad == "new";
+    const char* const* seq = fresh ? newGame : resume;
+    int n = fresh ? 3 : 1;
+    if (lobby_pressTitleButton(seq[step]))
+    {
+        log("autotest: pressed %s", seq[step]);
+        if (++step >= n) step = -1;
+    }
+    else if (now - started > 240000) { log("autotest: gave up waiting for %s", seq[step]); step = -1; }
+}
+
 void titleUpdate_hook(TitleScreen* self)
 {
     titleUpdate_orig(self);
     titleEvents();
     lobby_titleButton(true);
     lobbyFrame();
+    autotestClicks();
 }
 
 // --- hook: GameWorld::mainLoop_GPUSensitiveStuff (once per frame) -----------------------------
 void (*mainLoop_orig)(GameWorld*, float) = NULL;
+// Debug: frame time statistics every 30 s (a periodic hitch shows as regular slow frames).
+static void frameStats()
+{
+    static LARGE_INTEGER freq = { 0 }, last = { 0 };
+    static double sum = 0, worst = 0; static int frames = 0, slow = 0; static DWORD since = 0;
+    static std::vector<double> times;
+    if (!g_cfg.debugKeys) return;
+    if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+    LARGE_INTEGER now; QueryPerformanceCounter(&now);
+    if (last.QuadPart)
+    {
+        double ms = (now.QuadPart - last.QuadPart) * 1000.0 / freq.QuadPart;
+        sum += ms; ++frames; if (ms > worst) worst = ms; if (ms > 50.0) ++slow;
+        times.push_back(ms);
+    }
+    last = now;
+    if (!since) since = GetTickCount();
+    if (GetTickCount() - since >= 30000 && frames > 0)
+    {
+        std::sort(times.begin(), times.end());
+        double p99 = times[(size_t)(times.size() * 0.99)];
+        log("frames: %d in 30 s, mean %.1f ms, p99 %.1f ms, worst %.1f ms, %d over 50 ms", frames, sum / frames, p99, worst, slow);
+        sum = worst = 0; frames = slow = 0; times.clear(); since = GetTickCount();
+    }
+}
+
 void mainLoop_hook(GameWorld* thisptr, float time)
 {
+    frameStats();
     if (!g_started) { g_started = true; startSession(); }
     if (GetTickCount() - g_lastLobbyTick > 100) { lobby_titleButton(false); lobbyFrame(); }   // in game (title screen hook idle)
     if (ou && ou->isPaused()) lobby_pauseButton();
+    autotestClicks();   // character editor of a new test game
+
     bool live = ready() && worldLoaded();
     if (live) chars_preFrame();
     pump();

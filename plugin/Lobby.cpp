@@ -354,6 +354,43 @@ namespace
         return NULL;
     }
     void onPauseButton(MyGUI::Widget*) { if (!g_win) create(); }
+    void listButtons(MyGUI::Widget* w, std::string& out, int depth)
+    {
+        if (!w || depth > 12 || out.size() > 1500) return;
+        const std::string& n = w->getName();
+        if (n.find("Button") != std::string::npos && w->getInheritedVisible()) { out += n; out += ' '; }
+        for (size_t i = 0; i < w->getChildCount(); ++i) listButtons(w->getChildAt(i), out, depth + 1);
+    }
+}
+
+// Test runs: press a visible title screen button whose widget name ends with `suffix` (as a click
+// would). Returns false while it is not there; logs the button names once to help find them.
+bool lobby_pressTitleButton(const char* suffix)
+{
+    try
+    {
+        MyGUI::Gui* gui = MyGUI::Gui::getInstancePtr();
+        if (!gui) return false;
+        MyGUI::Widget* b = NULL;
+        MyGUI::EnumeratorWidgetPtr roots = gui->getEnumerator();
+        while (!b && roots.next()) b = findByNameSuffix(roots.current(), suffix, 0);
+        if (!b || !b->getInheritedVisible())
+        {
+            static bool listed = false;
+            if (!listed)
+            {
+                listed = true;
+                std::string names;
+                MyGUI::EnumeratorWidgetPtr all = gui->getEnumerator();
+                while (all.next()) listButtons(all.current(), names, 0);
+                log("title buttons: %s", names.c_str());
+            }
+            return false;
+        }
+        b->eventMouseButtonClick(b);
+        return true;
+    }
+    catch (...) { return false; }
 }
 
 // The Escape that closed our window also reached the game, which opened its pause menu: a native

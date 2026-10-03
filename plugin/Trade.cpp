@@ -166,6 +166,15 @@ void trade_tick(DWORD now)
     }
 }
 
+void trade_endAll()
+{
+    if (!g_open) return;
+    g_open = false;
+    safeClose();
+    send(g_trade.player, TRADE_END, 0, 0);
+    log("trade with %s ended", playerName(g_trade.player).c_str());
+}
+
 void trade_onPlayerLeft(uint8_t id)
 {
     g_incoming.erase(id);

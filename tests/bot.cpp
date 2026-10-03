@@ -45,9 +45,40 @@ static uint32_t firstId(uint8_t type, const Bytes& body)
 
 struct Rec { DWORD ms; uint8_t type; Bytes body; };
 
+// KMP_TEST_NEAR=1: the recorded NPCs are moved next to the client's character (its first state):
+// they then stand within the client's "near" radius (off-screen immunity test).
+static bool nearMode = false, haveClient = false, haveShift = false;
+static float clientPos[3], shift[3];
+static Bytes moveNear(uint8_t type, const Bytes& body)
+{
+    ByteReader r(body);
+    if (type == MSG_ENTITY_SPAWN)
+    {
+        EntitySpawn sp; sp.read(r);
+        if (!r.ok()) return body;
+        if (!haveShift) { shift[0] = clientPos[0] + 20 - sp.x; shift[1] = clientPos[1] - sp.y; shift[2] = clientPos[2] + 20 - sp.z; haveShift = true; }
+        sp.x += shift[0]; sp.y += shift[1]; sp.z += shift[2];
+        ByteWriter w; sp.write(w); return w.data;
+    }
+    if (type == MSG_ENTITY_STATE && haveShift)
+    {
+        uint32_t clock = r.u32(); uint16_t n = r.u16();
+        ByteWriter w; w.u32(clock); w.u16(n);
+        for (int i = 0; i < n && r.ok(); ++i)
+        {
+            EntityState st; st.read(r);
+            st.x += shift[0]; st.y += shift[1]; st.z += shift[2]; st.tx += shift[0]; st.ty += shift[1]; st.tz += shift[2];
+            st.write(w);
+        }
+        return r.ok() ? w.data : body;
+    }
+    return body;
+}
+
 // Host mode: serve a recorded world-NPC stream to whoever joins (tests the client side).
 static int hostReplay(const char* file, int port, int seconds, const char* mods)
 {
+    { char nm[8]; size_t nl = 0; nearMode = getenv_s(&nl, nm, sizeof(nm), "KMP_TEST_NEAR") == 0 && nl > 1; }
     std::vector<Rec> recs;
     FILE* f = NULL;
     if (fopen_s(&f, file, "rb") != 0 || !f) { printf("cannot open %s\n", file); return 1; }
@@ -68,12 +99,23 @@ static int hostReplay(const char* file, int port, int seconds, const char* mods)
     DWORD t0 = GetTickCount(), start = 0;
     size_t next = 0;
     int damages = 0;
+    // KMP_TEST_ZONE=a,b: tell the client it is on its own at a s, back in our world at b s (load sharing).
+    int zoneA = -1, zoneB = -1, zoneStep = -1; uint8_t joined = 0;
+    {
+        char z[32]; size_t zl = 0;
+        if (getenv_s(&zl, z, sizeof(z), "KMP_TEST_ZONE") == 0 && zl > 1) sscanf_s(z, "%d,%d", &zoneA, &zoneB);
+    }
     while (GetTickCount() - t0 < (DWORD)seconds * 1000)
     {
         NetEvent e;
         while (s.pollEvent(e))
         {
-            if (e.kind == NetEvent::EV_PLAYER_JOINED) { printf("[host] %s joined, replaying\n", e.player.name.c_str()); start = GetTickCount(); next = 0; }
+            if (e.kind == NetEvent::EV_PLAYER_JOINED) { printf("[host] %s joined, replaying\n", e.player.name.c_str()); start = GetTickCount(); next = 0; joined = e.player.id; zoneStep = 0; }
+            else if (e.kind == NetEvent::EV_MESSAGE && e.msgType == MSG_ENTITY_STATE && !haveClient)
+            {
+                ByteReader r(e.body); r.u32(); uint16_t n = r.u16();
+                if (n) { EntityState st; st.read(r); if (r.ok()) { clientPos[0] = st.x; clientPos[1] = st.y; clientPos[2] = st.z; haveClient = true; printf("[host] client character at (%.0f, %.0f, %.0f)\n", st.x, st.y, st.z); } }
+            }
             else if (e.kind == NetEvent::EV_MESSAGE && e.msgType == MSG_DAMAGE)
             {
                 ByteReader r(e.body); r.u8(); DamageMsg d; d.read(r);
@@ -81,9 +123,25 @@ static int hostReplay(const char* file, int port, int seconds, const char* mods)
                 ++damages;
             }
         }
+        if (start && zoneA >= 0 && zoneStep >= 0)
+        {
+            DWORD since = (GetTickCount() - start) / 1000;
+            int mode = -1;
+            if (zoneStep == 0) { mode = 1; zoneStep = 1; }
+            else if (zoneStep == 1 && (int)since >= zoneA) { mode = 0; zoneStep = 2; }
+            else if (zoneStep == 2 && (int)since >= zoneB) { mode = 1; zoneStep = 3; }
+            if (mode >= 0)
+            {
+                ByteWriter w; w.u8(joined); w.u8((uint8_t)mode);
+                s.sendTo(joined, MSG_ZONE_MODE, w.data);
+                printf("[host] zone mode for player %d: %s\n", (int)joined, mode ? "shared" : "on its own");
+            }
+        }
         if (start)
             while (next < recs.size() && GetTickCount() - start >= recs[next].ms)
             {
+                if (nearMode && haveClient) { s.send(recs[next].type, moveNear(recs[next].type, recs[next].body)); ++next; continue; }
+                if (nearMode && !haveClient) break;   // wait until we know where the client is
                 s.send(recs[next].type, recs[next].body);
                 ++next;
                 if (next == recs.size()) printf("[host] replay finished\n");
@@ -188,6 +246,13 @@ int main(int argc, char** argv)
     int seconds = argc > 3 ? atoi(argv[3]) : 300;
     // offsetX, or "d<ms>": follow the host's exact path that many ms behind (no side offset).
     float offset = 4.0f; DWORD delayMs = 0;
+    // KMP_TEST_FAR=a,b: from a to b seconds after connecting, our copy stands 4000 units away
+    // (load sharing: the host must hand our surroundings over to us, then take them back).
+    int farFrom = -1, farTo = -1;
+    {
+        char farEnv[32]; size_t fl = 0;
+        if (getenv_s(&fl, farEnv, sizeof(farEnv), "KMP_TEST_FAR") == 0 && fl > 1) sscanf_s(farEnv, "%d,%d", &farFrom, &farTo);
+    }
     if (argc > 4) { if (argv[4][0] == 'd') { delayMs = (DWORD)atoi(argv[4] + 1); offset = 0.f; } else offset = (float)atof(argv[4]); }
     struct Delayed { DWORD due; Bytes body; };
     std::vector<Delayed> delayed;
@@ -200,7 +265,9 @@ int main(int argc, char** argv)
     std::string err;
     // Must equal the host's active mod list (see the rejection message if it differs).
     s.setModList(argc > 6 ? argv[6] : "game 1.0.65;base;Newwworld;Dialogue;rebirth;KenshiMP", true);
-    if (!s.join(addr, port, "Bot", "Bot Nation", err)) { printf("join failed: %s\n", err.c_str()); return 1; }
+    char botName[32] = "Bot"; size_t bnl = 0;
+    if (getenv_s(&bnl, botName, sizeof(botName), "KMP_BOT_NAME") != 0 || bnl <= 1) strcpy_s(botName, "Bot");
+    if (!s.join(addr, port, botName, std::string(botName) + " Nation", err)) { printf("join failed: %s\n", err.c_str()); return 1; }
 
     // "ko" or "ko<seconds>": our copies fall unconscious that long after connecting (default 15).
     bool koMode = argc > 7 && strncmp(argv[7], "ko", 2) == 0;
@@ -208,6 +275,8 @@ int main(int argc, char** argv)
     std::map<uint32_t, std::vector<InvItem> > myInv;   // our copies' loose items (ko mode)
     std::map<uint32_t, std::vector<InvItem> > myPack;  // our copies' backpack content
     bool packDirty = false;
+    std::string spoofTemplate;   // a valid character template (spoof test)
+    std::map<uint32_t, uint32_t> npcMoney;   // host NPCs that carry money (traders)
     std::set<uint32_t> hostChars;
     int states = 0, spawns = 0, looks = 0, builds = 0, damages = 0;
     bool hitSent = false, lastCombat = false, worldSeen = false;
@@ -236,6 +305,16 @@ int main(int argc, char** argv)
                 if (!r.ok() || target != 1) continue;
                 printf("[bot] %s from player %d on %08x: %d x %s\n", e.msgType == MSG_ITEM_TAKE ? "LOOTED" : "RECEIVED",
                        (int)e.sender, id, it.quantity, it.item.c_str());
+                // KMP_TEST_UNDO=1: takes from our backpack are refused (the taker must undo them).
+                char undoEnv[8]; size_t undoLen = 0;
+                if (e.msgType == MSG_ITEM_TAKE && kind == CONTAINER_BACKPACK &&
+                    getenv_s(&undoLen, undoEnv, sizeof(undoEnv), "KMP_TEST_UNDO") == 0 && undoLen > 1)
+                {
+                    ByteWriter u; u.u8(e.sender); u.u8(UNDO_REMOVE); u.u8(kind); u.u32(id); it.write(u);
+                    s.send(MSG_ITEM_UNDO, u.data);
+                    printf("[bot] REFUSED the take of %d x %s (undo sent)\n", it.quantity, it.item.c_str());
+                    continue;
+                }
                 std::vector<InvItem>& inv = kind == CONTAINER_BACKPACK ? myPack[id] : myInv[id];
                 if (e.msgType == MSG_ITEM_TAKE)
                 {
@@ -247,6 +326,14 @@ int main(int argc, char** argv)
                 for (size_t i = 0; i < inv.size(); ++i) inv[i].write(w);
                 s.send(MSG_INVENTORY, w.data);
                 printf("[bot] our copy now carries %d stack(s)\n", (int)inv.size());
+                continue;
+            }
+            if (e.kind == NetEvent::EV_MESSAGE && e.msgType == MSG_ITEM_UNDO)
+            {
+                ByteReader r(e.body);
+                uint8_t target = r.u8(), action = r.u8(), kind = r.u8(); uint32_t id = r.u32(); InvItem it; it.read(r);
+                if (r.ok() && target == 1)
+                    printf("[bot] UNDO from player %d: %s %d x %s (%08x, kind %d)\n", (int)e.sender, action == UNDO_REMOVE ? "remove" : "give back", it.quantity, it.item.c_str(), id, (int)kind);
                 continue;
             }
             if (e.kind == NetEvent::EV_MESSAGE && e.msgType == MSG_TRADE)
@@ -292,7 +379,16 @@ int main(int argc, char** argv)
                     if (npcSeen.size() <= 12) printf("[bot] NPC %08x '%s' faction=%s\n", fid, sp.displayName.c_str(), sp.factionSid.c_str());
                 }
                 if (e.msgType == MSG_ENTITY_STATE) ++npcStates;
-                if (e.msgType == MSG_INVENTORY) ++npcInventories;
+                if (e.msgType == MSG_INVENTORY)
+                {
+                    ++npcInventories;
+                    // remember it (and its money, if it trades) for the money test
+                    ByteReader ri(e.body); uint8_t kind = ri.u8(); uint32_t id = ri.u32(); uint16_t n = ri.u16();
+                    for (int i = 0; i < n && ri.ok(); ++i) { InvItem it; it.read(ri); }
+                    uint32_t money = 0;
+                    if (ri.ok() && ri.remaining() && ri.u8() == 1) money = ri.u32();
+                    if (ri.ok() && kind == CONTAINER_CHARACTER) npcMoney[id] = money;
+                }
                 if (e.msgType == MSG_ENTITY_DESPAWN) ++npcDespawns;
                 if (record)
                 {
@@ -311,6 +407,7 @@ int main(int argc, char** argv)
                 EntitySpawn sp; sp.read(r);
                 if (!r.ok()) break;
                 if (!hostChars.count(sp.netId)) printf("[bot] host character %08x '%s' template=%s\n", sp.netId, sp.displayName.c_str(), sp.gameDataName.c_str());
+                if (spoofTemplate.empty()) spoofTemplate = sp.gameDataName;
                 hostChars.insert(sp.netId);
                 ++spawns;
                 sp.netId = mine(sp.netId); sp.displayName = "Bot " + sp.displayName; sp.x += offset;
@@ -325,7 +422,43 @@ int main(int argc, char** argv)
                 for (int i = 0; i < n && r.ok(); ++i)
                 {
                     EntityState st; st.read(r);
-                    st.netId = mine(st.netId); st.x += offset; st.tx += offset;
+                    uint32_t fightTarget = 0;
+                    // KMP_TEST_TASK=a,b,task: from a to b s our copy stands still doing that task.
+                    // KMP_TEST_FIGHT=a,b: from a to b s it fights the host's first character.
+                    {
+                        static int taskA = -2, taskB = 0, taskId = 0, fightA = -2, fightB = 0, fightC = 0, floorA = -2, floorB = 0;
+                        if (floorA == -2) { char e3[32]; size_t l3 = 0; floorA = -1;
+                            if (getenv_s(&l3, e3, sizeof(e3), "KMP_TEST_FLOOR") == 0 && l3 > 1) sscanf_s(e3, "%d,%d", &floorA, &floorB); }
+                        if (taskA == -2) { char e1[32]; size_t l1 = 0; taskA = -1;
+                            if (getenv_s(&l1, e1, sizeof(e1), "KMP_TEST_TASK") == 0 && l1 > 1) sscanf_s(e1, "%d,%d,%d", &taskA, &taskB, &taskId); }
+                        if (fightA == -2) { char e2[32]; size_t l2 = 0; fightA = -1;
+                            if (getenv_s(&l2, e2, sizeof(e2), "KMP_TEST_FIGHT") == 0 && l2 > 1) sscanf_s(e2, "%d,%d,%d", &fightA, &fightB, &fightC); }
+                        int sec = connectedAt ? (int)((GetTickCount() - connectedAt) / 1000) : -1;
+                        static float holdX = 0, holdY = 0, holdZ = 0; static bool holding = false;
+                        if (i == 0 && taskA >= 0 && sec >= taskA && sec < taskB)
+                        {
+                            if (!holding) { holding = true; holdX = st.x + offset; holdY = st.y; holdZ = st.z; printf("[bot] task test: standing still, task %d\n", taskId); }
+                            st.x = holdX - offset; st.y = holdY; st.z = holdZ; st.tx = st.x; st.ty = st.y; st.tz = st.z; st.vx = st.vy = st.vz = 0;
+                            st.flags &= ~EntityState::RUNNING; st.task = (uint16_t)taskId; st.taskSubject = TargetRef();
+                        }
+                        if (i == 0 && floorA >= 0 && sec >= floorA && sec < floorB)
+                        {
+                            static bool saidF = false; if (!saidF) { saidF = true; printf("[bot] floor test: our copy says it is on floor 1 (no building here)\n"); }
+                            st.floor = 1;
+                        }
+                        int fightEnd = fightC > fightB ? fightC : fightB;
+                        if (i == 0 && fightA >= 0 && sec >= fightA && sec < fightEnd)
+                        {
+                            bool refusedPhase = fightC > fightB && sec < fightB;   // first phase: an order that is not an attack
+                            static int said = -1; if (said != (int)refusedPhase) { said = (int)refusedPhase; printf("[bot] fight test: attacking %08x with task %d\n", st.netId, refusedPhase ? 3 : 262); }
+                            st.flags |= EntityState::IN_COMBAT; st.task = refusedPhase ? 3 : 262;   // PICKUP (must be refused), then RANGED_ATTACK
+                            if (!refusedPhase) { st.x += 60.f; st.tx += 60.f; st.vx = st.vy = st.vz = 0; }   // shooting distance
+                            fightTarget = st.netId;   // the host's own character (set after swapRef below)
+                        }
+                    }
+                    st.netId = mine(st.netId); { float o = offset; DWORD sinceC = connectedAt ? (GetTickCount() - connectedAt) / 1000 : 0;
+                      if (farFrom >= 0 && connectedAt && (int)sinceC >= farFrom && (int)sinceC < farTo) o = 4000.f;
+                      st.x += o; st.tx += o; }
                     if (i == 0) { copyX = st.x; copyY = st.y; copyZ = st.z; copyKnown = true; }
                     if (koMode && connectedAt && GetTickCount() - connectedAt > koAfter * 1000)
                     {
@@ -334,6 +467,7 @@ int main(int argc, char** argv)
                         for (size_t f = 0; f < st.flesh.size(); ++f) if (st.flesh[f] > -8.f) st.flesh[f] = -8.f;
                     }
                     swapRef(st.combatTarget); swapRef(st.taskSubject);
+                    if (fightTarget && i == 0) { st.combatTarget = TargetRef(); st.combatTarget.kind = TargetRef::NET_CHARACTER; st.combatTarget.netId = fightTarget; fightTarget = 0; }
                     if (st.combatTarget.kind != TargetRef::NONE && !lastCombat)
                         printf("[bot] host character in combat, target kind %d id %08x -> ghost mirrors it\n", (int)st.combatTarget.kind, st.combatTarget.netId);
                     lastCombat = st.combatTarget.kind != TargetRef::NONE;
@@ -363,6 +497,9 @@ int main(int argc, char** argv)
                     // KMP_TEST_LIMB=<prosthetic id>: our copy wears it as its right arm (prosthetic test).
                     char limb[256]; size_t ln = 0;
                     if (getenv_s(&ln, limb, sizeof(limb), "KMP_TEST_LIMB") == 0 && ln > 1) { st[1] = 2; li[1] = ItemRef(); li[1].item = limb; }
+                    // KMP_TEST_CROSSBOW=<id>: our copy carries that crossbow (ranged fight test).
+                    char bow[256]; size_t bl = 0;
+                    if (getenv_s(&bl, bow, sizeof(bow), "KMP_TEST_CROSSBOW") == 0 && bl > 1) { ItemRef cb; cb.item = bow; items.push_back(cb); ++n; }
                     // KMP_TEST_BACKPACK=<backpack id>: our copy wears it, filled with 3 of the host's first item.
                     char pack[256]; size_t pn = 0;
                     if (getenv_s(&pn, pack, sizeof(pack), "KMP_TEST_BACKPACK") == 0 && pn > 1)
@@ -390,6 +527,7 @@ int main(int argc, char** argv)
                 for (int i = 0; i < n && r.ok(); ++i) { InvItem it; it.read(r); items.push_back(it); }
                 if (!r.ok()) break;
                 if (kind == CONTAINER_CHARACTER) hostInv[id] = items;
+
                 printf("[bot] inventory of %s %08x: %d item(s)%s%s\n", kind ? "building" : "character", id, (int)n,
                        n ? ", first: " : "", n ? items[0].item.c_str() : "");
                 if (koMode && kind == CONTAINER_CHARACTER)
@@ -405,7 +543,10 @@ int main(int argc, char** argv)
             case MSG_GROUND_ITEM:
             {
                 uint32_t id = r.u32(); InvItem it; it.read(r); float x = r.f32(), y = r.f32(), z = r.f32();
-                if (r.ok()) printf("[bot] host dropped %d x %s on the ground at (%.0f, %.0f, %.0f) as %08x\n", it.quantity, it.item.c_str(), x, y, z, id);
+                int inside = -1;
+                if (r.ok() && r.remaining() && r.u8() == 1) { inside = r.u16(); for (int i = 0; i < inside && r.ok(); ++i) { InvItem c; c.read(r); printf("[bot]    inside: %d x %s\n", c.quantity, c.item.c_str()); } }
+                if (r.ok()) printf("[bot] host dropped %d x %s on the ground at (%.0f, %.0f, %.0f) as %08x%s\n", it.quantity, it.item.c_str(), x, y, z, id,
+                                   inside >= 0 ? " (a bag with content)" : "");
                 break;
             }
             case MSG_GROUND_REMOVE:
@@ -461,6 +602,7 @@ int main(int argc, char** argv)
                     m.write(w);
                 }
                 if (r.ok()) { s.send(MSG_BUILDING_STATE, w.data); builds += n; }
+                if (connectedAt) printf("[bot] t=%lus building state: %d building(s)\n", (GetTickCount() - connectedAt) / 1000, (int)n);
                 break;
             }
             case MSG_DAMAGE:
@@ -546,6 +688,49 @@ int main(int argc, char** argv)
                 for (size_t i = 0; i < it->second.size(); ++i) it->second[i].write(w);
                 s.send(MSG_INVENTORY, w.data);
             }
+        }
+        static bool spoofed = false;
+        char spoofEnv[8]; size_t spoofLen = 0;
+        if (connectedAt && !spoofed && since >= 85 && getenv_s(&spoofLen, spoofEnv, sizeof(spoofEnv), "KMP_TEST_SPOOF") == 0 && spoofLen > 1 && copyKnown)
+        {
+            spoofed = true;
+            EntitySpawn sp; sp.netId = makeNetId(1, 0x77); sp.kind = KIND_CHARACTER; sp.displayName = "Spoof";
+            if (!hostChars.empty()) { /* any valid template: reuse the host's first character's */ }
+            sp.gameDataName = spoofTemplate; sp.factionSid = "kenshimp_player_0"; sp.x = copyX + 3; sp.y = copyY; sp.z = copyZ;
+            ByteWriter w; sp.write(w); s.send(MSG_ENTITY_SPAWN, w.data);
+            printf("[bot] spoof test: spawned %08x claiming the host's faction\n", sp.netId);
+        }
+        static bool moneyAsked = false;
+        char moneyEnv[8]; size_t moneyLen = 0;
+        if (connectedAt && !moneyAsked && since >= 66 && getenv_s(&moneyLen, moneyEnv, sizeof(moneyEnv), "KMP_TEST_MONEY") == 0 && moneyLen > 1)
+        {
+            moneyAsked = true;
+            if (npcMoney.empty()) printf("[bot] money test: no NPC with money seen\n");
+            else
+            {
+                std::map<uint32_t, uint32_t>::iterator m = npcMoney.begin();
+                for (std::map<uint32_t, uint32_t>::iterator i = npcMoney.begin(); i != npcMoney.end(); ++i) if (i->second > m->second) m = i;   // the richest
+                InvItem pay; pay.item = "$money"; pay.quantity = 50;
+                ByteWriter w; w.u8(HOST_ID); w.u8(CONTAINER_CHARACTER); w.u32(m->first); pay.write(w);
+                s.send(MSG_ITEM_TAKE, w.data);
+                printf("[bot] money test: asked 50 from NPC %08x (it has %u)\n", m->first, m->second);
+            }
+        }
+        static bool gearGiven = false;
+        char gearEnv[8]; size_t gearLen = 0;
+        if (connectedAt && !gearGiven && since >= 62 && getenv_s(&gearLen, gearEnv, sizeof(gearEnv), "KMP_TEST_GEAR") == 0 && gearLen > 1)
+        {
+            gearGiven = true;
+            for (std::map<uint32_t, std::vector<ItemRef> >::iterator it = hostGear.begin(); it != hostGear.end(); ++it)
+                if (!it->second.empty())
+                {
+                    InvItem g; g.item = it->second[0].item; g.manufacturer = it->second[0].manufacturer; g.material = it->second[0].material;
+                    g.quantity = 2; g.quality = 50.f;
+                    ByteWriter w; w.u8(HOST_ID); w.u8(CONTAINER_CHARACTER); w.u32(it->first); g.write(w);
+                    s.send(MSG_ITEM_GIVE, w.data);
+                    printf("[bot] script: gave 2 x %s to %08x (gear test)\n", g.item.c_str(), it->first);
+                    break;
+                }
         }
         if (connectedAt && script == 0 && since >= 20 && !koMode)
         {

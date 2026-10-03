@@ -106,7 +106,8 @@ namespace
     // A bag (backpack, sack...) carries its own inventory, travelling with it to the ground.
     Inventory* safeBagInventory(Item* it)
     {
-        __try { return it->getClassType() == ITEM_CONTAINER ? static_cast<ContainerItem*>(it)->inventory : NULL; }
+        // By its data type (backpacks, sacks...: CONTAINER); the class type does not say it.
+        __try { return it->data && it->data->type == CONTAINER ? static_cast<ContainerItem*>(it)->inventory : NULL; }
         __except (EXCEPTION_EXECUTE_HANDLER) { return NULL; }
     }
     Item* safeWornBag(Character* c)
@@ -424,6 +425,60 @@ namespace
         __try { c->getMovement()->_setPositionAndTeleport(*p, 0); return true; }
         __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
     }
+}
+
+namespace
+{
+    hand g_testBag;
+    bool safeEquipBag(Character* c, Item* it)
+    {
+        __try { return c->inventory && c->inventory->equipItem(it); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    bool safeDropOnly(Character* c, Item* it)
+    {
+        __try { if (!c->inventory) return false; c->inventory->dropItem(it); return true; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+}
+
+// Test runs: a backpack with two items inside, given to c (dropped a few seconds later, so the
+// owner scan sees it arrive, then leave).
+std::string ground_debugGiveBag(Character* c)
+{
+    lektor<GameData*> bags, things;
+    ou->gamedata.getDataOfType(bags, CONTAINER);
+    ou->gamedata.getDataOfType(things, ITEM);
+    GameData* bagData = NULL;
+    for (uint32_t i = 0; i < bags.size() && !bagData; ++i)
+        if (bags[i] && bags[i]->name.find("Backpack") != std::string::npos) bagData = bags[i];
+    if (!bagData || things.size() == 0 || !things[0]) return "no backpack / item data";
+    InvItem b; b.item = bagData->stringID; b.quantity = 1;
+    Item* bag = create(b);
+    if (!bag) return "could not create " + b.item;
+    // A bag gets its own inventory once worn: put it on, then fill it.
+    if (!c->inventory || !safeAddTo(c->inventory, bag, 1)) return "could not give the bag";
+    bool worn = safeEquipBag(c, bag);
+    Item* wornBag = safeWornBag(c);
+    if (wornBag) bag = wornBag;
+    Inventory* inside = safeBagInventory(bag);
+    int put = 0;
+    for (int k = 0; k < 2 && inside; ++k)
+    {
+        InvItem t; t.item = things[k < (int)things.size() ? k : 0]->stringID; t.quantity = 1;
+        Item* it = create(t);
+        if (it && safeAddTo(inside, it, 1)) ++put;
+    }
+    g_testBag = hand(bag);
+    char buf[200]; sprintf_s(buf, "%s worn=%d inventory=%d with %d item(s) inside", bagData->name.c_str(), (int)worn, (int)(inside != NULL), put);
+    return buf;
+}
+
+std::string ground_debugDropBag(Character* c)
+{
+    Item* bag = g_testBag.getItem();
+    if (!bag) return "no test bag";
+    return safeDropOnly(c, bag) ? "dropped" : "could not drop";
 }
 
 std::string ground_debugPickup(Character* taker)

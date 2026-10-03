@@ -649,6 +649,7 @@ namespace
     }
 
     // ------------------------------------------------------------------ ghosts
+    long g_floorFixes = 0, g_floorGiveUps = 0;   // ghost floor corrections (stats)
     struct Ghost
     {
         hand h;
@@ -662,6 +663,7 @@ namespace
         ItemRef limbItem[4];
         std::vector<float> pendingStats;
         float pendingHunger;            // owner's hunger (-1: not sent)
+        int pendingRanged;              // owner's "ranged" toggle (-1: not sent)
         Character* combatTarget;        // what we last told it to attack
         int mirroredTask;               // TaskType we last ordered (-1 none)
         TargetRef mirroredSubject;
@@ -693,7 +695,8 @@ namespace
         double freezeMs;                // current streak: owner moving, body not
         DWORD stuckSince;               // owner still, ghost still far: since when
         Ogre::Vector3 stuckTarget;      // last target we unstuck it to (no teleport loop on a blocked spot)
-        Ghost() : hasPendingAppearance(false), hasPendingEquipment(false), hasLimbs(false), hasPendingStats(false), pendingHunger(-1.f),
+        int floorTries; int floorFor;   // floor corrections made for the owner's current floor
+        Ghost() : floorTries(0), floorFor(-1), hasPendingAppearance(false), hasPendingEquipment(false), hasLimbs(false), hasPendingStats(false), pendingHunger(-1.f), pendingRanged(-1),
                   combatTarget(NULL), mirroredTask(-1), lastSpeed(-1), mode(MOVE), intervalMs(100),
                   lastSnapT(0), lastMoveCmd(0), lastFrame(0), hasVisual(false), visualPos(Ogre::Vector3::ZERO),
                   visualRot(Ogre::Quaternion::IDENTITY), blend(0), lastDrawn(Ogre::Vector3::ZERO),
@@ -856,6 +859,11 @@ namespace
             int n = 0;
             if (float* st = statsBlock(c, n))
                 for (int i = 0; i < n && i < (int)g.pendingStats.size(); ++i) st[i] = g.pendingStats[i];
+            if (g.pendingRanged >= 0 && c->stats && c->stats->rangedMode != (g.pendingRanged == 1))
+            {
+                c->stats->rangedMode = g.pendingRanged == 1;
+                if (g_cfg.debugKeys) log("ghost %08x ranged mode %s (as its owner)", id, g.pendingRanged ? "on" : "off");
+            }
             if (g.pendingHunger >= 0.f)
             {
                 if (g_cfg.debugKeys && fabsf(c->medical.hunger - g.pendingHunger) >= 0.05f)
@@ -933,6 +941,7 @@ namespace
         // Only the host's world NPCs carry a faction of their own; a player's characters always go to
         // that player's mirror faction (never ours, whatever the message says).
         bool worldNpc = owner == HOST_ID && isNpcNetId(sp.netId) && !sp.factionSid.empty();
+        if (!worldNpc && !sp.factionSid.empty()) log("spawn %08x from %s: faction '%s' ignored (players' characters go to their own faction)", sp.netId, playerName(owner).c_str(), sp.factionSid.c_str());
         Faction* f = worldNpc ? ou->factionMgr->getFactionByStringID(sp.factionSid) : factionFor(owner);
         if (worldNpc && f && (f->isThePlayer() || f == ou->player->getFaction())) f = NULL;
         GameData* tmpl = dataOf(sp.gameDataName);
@@ -1075,7 +1084,9 @@ namespace
                 // Explicit order + attackTarget; the ghost's AI is re-enabled while it fights
                 // (combat decisions live in AI::periodicUpdate, see aiPeriodic_hook).
                 Ogre::Vector3 at = enemy->getPosition();
-                bool ordered = safeOrder(c, isAttackTask(s.task) ? s.task : (int)FOCUSED_MELEE_ATTACK, enemy, &at);
+                int order = isAttackTask(s.task) ? s.task : (int)FOCUSED_MELEE_ATTACK;
+                if (g_cfg.debugKeys && s.task != 0xFFFF && order != s.task) log("ghost %08x: combat order %d refused, attacks instead", s.netId, (int)s.task);
+                bool ordered = safeOrder(c, order, enemy, &at);
                 bool attacked = safeAttack(c, enemy);
                 if (ordered || attacked) g.combatTarget = enemy;
                 log("ghost %08x engages %08x (order=%d attack=%d)", s.netId, s.combatTarget.netId, (int)ordered, (int)attacked);
@@ -1100,6 +1111,7 @@ namespace
                 Ogre::Vector3 loc(s.tx, s.ty, s.tz);
                 if ((subject || s.taskSubject.kind == TargetRef::NONE) && safeOrder(c, s.task, subject, &loc))
                 {
+                    if (g_cfg.debugKeys) log("ghost %08x copies its owner's task %d", s.netId, (int)s.task);
                     g.mirroredTask = s.task;
                     g.mirroredSubject = s.taskSubject;
                 }
@@ -1227,9 +1239,14 @@ namespace
             }
             int ghostFloor = c->getFloor();
             if (ghostFloor < 0) ghostFloor = 0;              // the sender clamps the same way
-            if (!settling && ghostFloor != g.last.floor && (ghostFloor > 0 || g.last.floor > 0) && dist < SNAP_DISTANCE && speedNow < 2.f)
+            if (g.floorFor != g.last.floor) { g.floorFor = g.last.floor; g.floorTries = 0; }
+            if (!settling && ghostFloor != g.last.floor && (ghostFloor > 0 || g.last.floor > 0) && dist < SNAP_DISTANCE && speedNow < 2.f && g.floorTries < 2)
             {
-                // Changing floor (stairs inside a building): place it on the owner's floor.
+                // Changing floor (stairs inside a building): place it on the owner's floor. Twice at
+                // most: if that floor does not exist here (building not loaded / different), the
+                // ghost would otherwise be teleported again every 400 ms.
+                if (++g.floorTries == 2) ++g_floorGiveUps;
+                ++g_floorFixes;
                 safeTeleport(c, &target, g.last.floor);
                 g.follow.reset(); g.settleUntil = now + SETTLE_MS; g.lastMoveAt = pnow;
                 continue;
@@ -1645,6 +1662,8 @@ Bytes cs_statsMsg(Character* c, uint32_t id)
     for (int i = 0; i < n; ++i) w.f32(st[i]);
     // Trailer: hunger, to the point the health panel shows (x100), so the message rarely changes.
     w.u8(1); w.f32(floorf(c->medical.hunger * 100.f) / 100.f);
+    // Trailer 2: the "ranged" toggle (shoot with the crossbow instead of closing in to melee).
+    if (c->stats) { w.u8(2); w.u8(c->stats->rangedMode ? 1 : 0); }
     return w.data;
 }
 
@@ -1904,7 +1923,7 @@ void chars_onPlayerLeft(uint8_t id)
         if (netIdOwner(it->first) == id) gone.push_back(it->first);
     // Off the map first, while the squads still exist (destroying their last ghosts may free them).
     for (std::map<std::pair<uint8_t, Faction*>, Platoon*>::iterator it = g_ghostSquads.begin(); it != g_ghostSquads.end();)
-        if (it->first.first == id) { mapRemove(it->second); g_ghostSquads.erase(it++); } else ++it;
+        if (it->first.first == id) { mapRemove(it->second); g_ghostSquads.erase(it++); log("player %d left: squad taken off the map before its characters", (int)id); } else ++it;
     for (size_t i = 0; i < gone.size(); ++i) despawnGhost(gone[i]);
     g_clocks.erase(id);   // a reconnecting player restarts its clock
 }
@@ -2010,10 +2029,16 @@ void chars_onMessage(const NetEvent& e)
         std::vector<float> st;
         for (int i = 0; i < n && r.ok(); ++i) st.push_back(clampF(r.f32(), 0.f, 1000.f));
         if (!r.ok() || netIdOwner(id) != e.sender) break;
-        float hunger = -1.f;
-        if (r.remaining() && r.u8() == 1) { float h = r.f32(); if (r.ok()) hunger = clampF(h, 0.f, 1000.f); }
+        float hunger = -1.f; int ranged = -1;
+        while (r.ok() && r.remaining())   // optional tagged trailers
+        {
+            uint8_t tag = r.u8();
+            if (tag == 1) { float h = r.f32(); if (r.ok()) hunger = clampF(h, 0.f, 1000.f); }
+            else if (tag == 2) { uint8_t v = r.u8(); if (r.ok()) ranged = v ? 1 : 0; }
+            else break;   // unknown (newer sender): ignore the rest
+        }
         Ghost& g = g_ghosts[id];
-        g.pendingStats = st; g.hasPendingStats = true; g.pendingHunger = hunger;
+        g.pendingStats = st; g.hasPendingStats = true; g.pendingHunger = hunger; g.pendingRanged = ranged;
         if (Character* c = g.h.getCharacter()) flushPending(id, g, c);
         break;
     }
@@ -2113,7 +2138,11 @@ namespace
             return HIT_FORWARDED;
         }
         // A ghost hitting one of our replicated characters: the real hit arrives by network.
-        if (attackerIsGhost && chars_netIdOf(victim)) return HIT_DROP;
+        if (attackerIsGhost && chars_netIdOf(victim))
+        {
+            if (g_cfg.debugKeys && !g_hitAttacker) log("hit on %s dropped: a ghost's projectile (its owner sends the real hit)", victim->getName().c_str());
+            return HIT_DROP;
+        }
         return HIT_APPLY;
     }
 }
@@ -2193,6 +2222,7 @@ void gunShoot_hook(GunClass* self, Character* me, RootObject* target, StatsEnume
                 if (it->second.empty() || (int)(it->second.back() - now) <= 0) g_ghostShots.erase(it++); else ++it;
         std::deque<DWORD>& q = g_ghostShots[target];
         if (q.size() < 16) q.push_back(now + window);
+        if (g_cfg.debugKeys) log("ghost shot at a target (flight window %u ms, %d in flight)", window, (int)q.size());
     }
     gunShoot_orig(self, me, target, stat, aim);
 }
@@ -2290,14 +2320,14 @@ namespace
     };
 }
 bool (*immune_orig)(Character*) = NULL;
-long g_immuneCalls = 0;
+long g_immuneCalls = 0, g_immuneNpcCalls = 0;
 bool immune_hook(Character* self)
 {
     if (g_cfg.tuneOnScreen && self && ready())
     {
         uint32_t id = ghostIdOf(self);
         if (id && !isNpcNetId(id)) { ++g_immuneCalls; return true; }
-        if (id && npcNearUs(self)) return true;   // host NPCs around our characters (fights, chases)
+        if (id && npcNearUs(self)) { ++g_immuneNpcCalls; return true; }   // host NPCs around our characters (fights, chases)
     }
     return immune_orig(self);
 }
@@ -2360,6 +2390,8 @@ void chars_logHitStats()
             g_trackErrSum / g_trackErrN, g_trackErrMax, g_trackErrN, g_snaps);
     if (g_unstucks) log("ghost tracking: %ld stuck ghost(s) placed next to their owner", g_unstucks);
     if (g_immuneCalls) { log("ghost tracking: off-screen mode refused %ld time(s)", g_immuneCalls); g_immuneCalls = 0; }
+    if (g_immuneNpcCalls) { log("ghost tracking: off-screen mode refused %ld time(s) for host NPCs near us", g_immuneNpcCalls); g_immuneNpcCalls = 0; }
+    if (g_floorFixes) { log("ghost tracking: %ld floor correction(s), %ld given up (owner's floor not reachable here)", g_floorFixes, g_floorGiveUps); g_floorFixes = g_floorGiveUps = 0; }
     if (g_trailGlides) { log("ghost tracking: %ld frame(s) helped along the trail (sprint start)", g_trailGlides); g_trailGlides = 0; }
     if (g_movingMs > 0)
         log("ghost tracking: frozen %.1f %% of the time their owner moved (longest %.0f ms), %ld unblock(s), %ld task/fight release(s)",

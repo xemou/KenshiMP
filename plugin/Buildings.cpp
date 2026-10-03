@@ -31,6 +31,8 @@
 
 using namespace mp;
 
+void builds_flushDismantle(bool force);   // defined with the dismantle hook below (global scope)
+
 namespace kmp {
 
 namespace
@@ -321,6 +323,7 @@ Building* builds_findWorld(const std::string& sid, float x, float y, float z)
 void builds_tick(DWORD now)
 {
     if (!g_cfg.syncBuildings) return;
+    ::builds_flushDismantle(false);
     std::vector<hand> rejected;
     { Lock l; rejected.swap(g_rejected); }
     for (size_t i = 0; i < rejected.size(); ++i)
@@ -461,15 +464,30 @@ Building* createBuilding_hook(RootObjectFactory* self, GameData* data, Ogre::Vec
 }
 
 // --- hook: Building::addDismantleProgress ----------------------------------------------------
+// The engine adds a little progress every frame: the amounts are summed per building and sent
+// at most 4 times a second (one message per frame flooded the network during a siege).
 bool (*dismantle_orig)(Building*, float) = NULL;
+static std::map<uint32_t, float> g_dismantleAcc;   // ghost building -> progress not sent yet (main thread)
+void builds_flushDismantle(bool force)
+{
+    static DWORD last = 0;
+    DWORD now = GetTickCount();
+    if (g_dismantleAcc.empty() || (!force && now - last < 250)) return;
+    last = now;
+    for (std::map<uint32_t, float>::iterator it = g_dismantleAcc.begin(); it != g_dismantleAcc.end(); ++it)
+    {
+        BuildingDamageMsg d; d.buildingNetId = it->first; d.door = 0xFF; d.dismantle = it->second;
+        ByteWriter w; w.u8(netIdOwner(it->first)); d.write(w);
+        g_session.send(MSG_BUILDING_DAMAGE, w.data);
+    }
+    g_dismantleAcc.clear();
+}
 bool dismantle_hook(Building* self, float amount)
 {
     if (!g_applyingSync && ready())
         if (uint32_t id = ghostIdOf(self))
         {
-            BuildingDamageMsg d; d.buildingNetId = id; d.door = 0xFF; d.dismantle = amount;
-            ByteWriter w; w.u8(netIdOwner(id)); d.write(w);
-            g_session.send(MSG_BUILDING_DAMAGE, w.data);
+            if (amount > 0.f) g_dismantleAcc[id] += amount;   // its owner applies it (sent by flushDismantle)
             return false;
         }
     return dismantle_orig(self, amount);

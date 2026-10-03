@@ -16,6 +16,7 @@
 #include <kenshi/GameWorld.h>
 #include <kenshi/Globals.h>
 #include <kenshi/Character.h>
+#include <kenshi/CharStats.h>
 #include <kenshi/GameData.h>
 #include <kenshi/GameDataManager.h>
 #include <kenshi/RootObjectFactory.h>
@@ -359,7 +360,7 @@ namespace
             InvItem rest = d; rest.quantity = d.quantity - added;
             sendUndo(sender, UNDO_GIVE_BACK, kind, id, rest);
         }
-        else log("%s gave %d x %s to %08x", playerName(sender).c_str(), d.quantity, d.item.c_str(), id);
+        else log("%s gave %d x %s to %08x (%d item(s) created)", playerName(sender).c_str(), d.quantity, d.item.c_str(), id, count);
     }
 
     // ------------------------------------------------------------------ transfer detection
@@ -810,6 +811,49 @@ std::string items_debugLoot(Character* taker)
         return "moved " + name;
     }
     return "no remote inventory is open";
+}
+
+// Test runs: a crossbow of the base game equipped on c (its ghost on the other side gets it from
+// the equipment sync: ranged fight test). Tries each one until the engine accepts it.
+bool safeEquipOn(Character* c, Item* it)
+{
+    __try { return c->inventory && c->inventory->equipItem(it); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+std::string items_debugEquipCrossbow(Character* c)
+{
+    lektor<GameData*> bows;
+    ou->gamedata.getDataOfType(bows, CROSSBOW);
+    std::string tried;
+    for (int pass = 0; pass < 2; ++pass)
+        for (uint32_t i = 0; i < bows.size(); ++i)
+        {
+            GameData* g = bows[i];
+            if (!g || (g->stringID.find("gamedata.base") != std::string::npos) != (pass == 0)) continue;
+            InvItem d; d.item = g->stringID; d.quantity = 1;
+            Item* it = create(d);
+            if (!it || !c->inventory || !safeAdd(c->inventory, it, 1)) continue;
+            if (safeEquipOn(c, it))
+            {
+                if (c->stats) c->stats->rangedMode = true;   // shoot, do not close in
+                return g->name + " (" + g->stringID + ") equipped, ranged mode on";
+            }
+            tried += g->name + "; ";
+            if (tried.size() > 300) break;
+        }
+    return "no crossbow could be equipped: " + tried;
+}
+
+// Test runs: one single item in c's inventory (two players then try to take it at once).
+std::string items_debugGiveOne(Character* c)
+{
+    lektor<GameData*> things;
+    ou->gamedata.getDataOfType(things, ITEM);
+    if (things.size() == 0 || !things[0] || !c->inventory) return "no item data";
+    InvItem d; d.item = things[0]->stringID; d.quantity = 1;
+    Item* it = create(d);
+    if (!it || !safeAdd(c->inventory, it, 1)) return "could not add " + d.item;
+    return "1 x " + d.item;
 }
 
 std::string items_debugBackpack(Character* taker)

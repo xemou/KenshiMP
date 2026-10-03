@@ -44,12 +44,14 @@ struct Config
     bool tuneSpeedMatch, tuneTrail, tuneRepath, tuneUnblock, tuneOnScreen;
     bool ghostNoCollide;   // experimental (off): ghosts are not pushed aside by nearby bodies
     bool loadSharing;      // host: a client far from the host simulates its own surroundings
+    std::string autotestLoad;  // test: save loaded automatically from the title screen
+    bool autotest;             // test: scripted checks once another player is there (log "autotest:")
     std::string lobbyKeyName;
     Config() : mode("off"), address("127.0.0.1"), port(47000), name("Player"), faction("My Faction"),
                relation(0), ghostAI("none"), syncAppearance(true), syncEquipment(true), syncBuildings(true),
                debugKeys(false), npcSync(true), strictMods(true), autoReconnect(true), pauseSync(true),
                renderSmoothing(true), weatherSync(true), lobbyKey(VK_F4), lobbyKeyName("F4"), language("auto"), playersOnMap(true),
-               tuneSpeedMatch(true), tuneTrail(true), tuneRepath(true), tuneUnblock(true), tuneOnScreen(true), ghostNoCollide(false), loadSharing(false) {}
+               tuneSpeedMatch(true), tuneTrail(true), tuneRepath(true), tuneUnblock(true), tuneOnScreen(true), ghostNoCollide(false), loadSharing(false), autotest(false) {}
 };
 
 extern mp::Session g_session;
@@ -145,6 +147,8 @@ Inventory* items_backpackOf(Character* c);                 // worn backpack's ow
 mp::Bytes items_backpackMsg(uint32_t id, Character* c);    // MSG_INVENTORY body of it, empty if none   // squad money (NPC traders), -1 if unknown
 std::string items_debugLoot(Character* taker);
 std::string items_debugBackpack(Character* taker);
+std::string items_debugGiveOne(Character* c);      // test: one item in c's inventory
+std::string items_debugEquipCrossbow(Character* c); // test: a crossbow in c's hands
 void items_sendUndo(uint8_t to, uint8_t action, uint8_t kind, uint32_t id, const mp::InvItem& d);   // owner refused a transfer
 
 // Trade.cpp: direct trade between players in the game's trade window
@@ -153,7 +157,11 @@ bool trade_pendingFrom(uint8_t player);      // they offered a trade (not answer
 void trade_onMessage(const mp::NetEvent& e);
 void trade_tick(DWORD now);
 void trade_onPlayerLeft(uint8_t id);
-void trade_onWorldReload();   // debug: first item out of a nearby remote backpack
+void trade_onWorldReload();
+void trade_endAll();
+bool lobby_pressTitleButton(const char* suffix);   // test runs: click a title screen button by name
+std::string ground_debugGiveBag(Character* c);     // test: a backpack holding two items, put in c's inventory
+std::string ground_debugDropBag(Character* c);     // test: drop that backpack on the ground                         // close our trade window (and tell the partner)   // debug: first item out of a nearby remote backpack
 std::string ground_debugPickup(Character* taker);   // debug: nearest ground item -> taker
 void items_onDespawn(uint32_t ghostId);         // a ghost body was removed: forget per-body item state
 void items_redressed(uint32_t ghostId);        // Characters.cpp re-dressed that ghost: put its backpack back   // debug: first item of an open remote inventory -> taker

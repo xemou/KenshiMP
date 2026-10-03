@@ -1,0 +1,51 @@
+[h1]KenshiMP — multijoueur coopératif et compétitif pour Kenshi[/h1]
+
+[b]BÊTA — sauvegardez vos parties avant de jouer. Signalez les bugs sur GitHub (lien en bas).[/b]
+
+Jouez à Kenshi entre amis. Chaque joueur garde son escouade, sa faction, sa base et ses villes ; vous voyez les persos des autres se déplacer, combattre, construire et échanger en temps réel. Les factions des joueurs peuvent être en paix, alliées ou en guerre.
+
+[b]C'est un plugin de code : il demande RE_Kenshi (voir Prérequis). Sans lui, ce mod ne fait rien.[/b]
+
+[h2]Fonctionnalités[/h2]
+[list]
+[*] Déplacements fluides des persos des autres joueurs (marche, course, sprint, combat), avec leur nom au-dessus de la tête
+[*] Vrais combats entre joueurs : les dégâts sont calculés par l'attaquant et appliqués par le propriétaire de la victime, jamais deux fois
+[*] Le monde de l'hôte est partagé : PNJ, animaux, heure, météo, pause (vitesse bloquée à x1)
+[*] Bâtiments et villes de chaque joueur, construction, destruction, portes
+[*] Inventaires, coffres, pillage, objets posés au sol, sacs à dos portés, argent des marchands
+[*] Échange direct entre joueurs dans la fenêtre d'échange du jeu
+[*] Diplomatie : guerre / paix / alliance par joueur, depuis la fenêtre Multijoueur ou le chat (/guerre, /paix, /allie)
+[*] Chat (Entrée), autres joueurs sur la carte du monde, blessures, membres coupés et prothèses, faim
+[*] Fenêtre Multijoueur (écran titre, menu pause ou F4) : héberger ou rejoindre en deux clics ; en français et en anglais
+[*] Partage de charge en option (load_sharing=1, expérimental) : un joueur loin de l'hôte simule ses propres environs, le PC de l'hôte ne fait tourner que sa région
+[/list]
+
+[h2]Prérequis (chaque joueur)[/h2]
+[list]
+[*] Kenshi sur Steam ou GOG (1.0.65 ou 1.0.68)
+[*] [url=https://www.nexusmods.com/kenshi/mods/847]RE_Kenshi[/url] 0.3.5 ou plus récent, installé avec son installateur
+[*] NVIDIA PhysX System Software 9.10.0513 et les DLL PhysX de Kenshi à côté du Kenshi_x64.exe de RE_Kenshi (détails dans GUIDE.md)
+[*] Exactement la même liste de mods, dans le même ordre, et la même version de KenshiMP (l'hôte refuse sinon et indique ce qui diffère)
+[/list]
+
+[h2]Comment jouer[/h2]
+[olist]
+[*] Abonnez-vous, cochez KenshiMP dans l'onglet Mods du lanceur. Le mode fenêtré sans bordure est conseillé.
+[*] Hôte : ouvrez la fenêtre Multijoueur (bouton sous le menu titre, ou F4), entrez votre nom et votre faction, cliquez Héberger, puis lancez ou chargez une partie. Donnez votre IP à vos amis.
+[*] Amis : même fenêtre, entrez l'adresse de l'hôte, cliquez Rejoindre, puis lancez une nouvelle partie (conseillé).
+[*] Par Internet : ouvrez le port TCP 47000 sur la box de l'hôte, ou utilisez un VPN de jeu gratuit comme Radmin VPN, ZeroTier ou Tailscale.
+[/olist]
+Les réglages sont enregistrés dans %LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg.
+
+[h2]Limites connues[/h2]
+[list]
+[*] Chaque client garde sa propre sauvegarde ; le sort des villes du monde (détruites, prises) n'est pas encore partagé.
+[*] Jusqu'à 8 joueurs ; l'hôte doit rester connecté (pas de changement d'hôte).
+[*] D'autres mods de code qui modifient les mêmes fonctions du jeu peuvent entrer en conflit.
+[/list]
+
+[h2]Code source et licence[/h2]
+Logiciel libre sous licence GNU GPL v3 (il repose sur KenshiLib, lui aussi sous GPL v3).
+Code source, guide complet et suivi des bugs : [url=https://github.com/xemou/KenshiMP]github.com/xemou/KenshiMP[/url]
+
+Signalez les bugs sur GitHub avec votre RE_Kenshi_log.txt (dans le dossier de Kenshi).
