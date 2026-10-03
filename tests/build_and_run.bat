@@ -6,5 +6,5 @@ if not exist "%VSDIR%\VC\Auxiliary\Build\vcvarsall.bat" set "VSDIR=C:\Program Fi
 call "%VSDIR%\VC\Auxiliary\Build\vcvarsall.bat" x64 >nul
 cd /d "%~dp0"
 if not exist out mkdir out
-cl /nologo /EHsc /W3 /Fo:out\ /Fe:out\net_test.exe net_test.cpp ..\core\Session.cpp || exit /b 1
+cl /nologo /EHsc /W3 /Fo:out\ /Fe:out\net_test.exe net_test.cpp ..\core\Session.cpp ..\core\Tunnel.cpp || exit /b 1
 out\net_test.exe

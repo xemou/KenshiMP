@@ -589,6 +589,14 @@ namespace
         if (step == 0 && s >= 2)
         {
             step = 1;
+            if (steam_available())
+            {
+                std::vector<SteamFriend> fr; steam_friends(fr);
+                int online = 0, kenshi = 0;
+                for (size_t i = 0; i < fr.size(); ++i) { if (fr[i].online) ++online; if (fr[i].inKenshi) ++kenshi; }
+                log("autotest: steam ok, %d friend(s), %d online, %d in Kenshi", (int)fr.size(), online, kenshi);
+            }
+            else log("autotest: steam not available");
             std::string p = configPath();
             log("autotest: settings file %s exists=%d", p.c_str(), (int)fileExists(p));
         }
@@ -654,8 +662,22 @@ namespace
         g_session.setPassword(g_cfg.password);
         std::string err;
         bool ok = false;
-        if (g_cfg.mode == "host") ok = g_session.host(g_cfg.port, g_cfg.name, g_cfg.faction, err);
-        else if (g_cfg.mode == "join") ok = g_session.join(g_cfg.address, g_cfg.port, g_cfg.name, g_cfg.faction, err);
+        if (g_cfg.mode == "host")
+        {
+            ok = g_session.host(g_cfg.port, g_cfg.name, g_cfg.faction, err);
+            if (ok) steam_onHosting(true, g_cfg.port);   // Steam friends can join too
+        }
+        else if (g_cfg.mode == "join")
+        {
+            // "steam:<id>": through Steam's network (tunnel to that player), otherwise an IP address.
+            if (g_cfg.address.compare(0, 6, "steam:") == 0)
+            {
+                int local = steam_tunnelTo(_strtoui64(g_cfg.address.c_str() + 6, NULL, 10));
+                if (local) ok = g_session.join("127.0.0.1", local, g_cfg.name, g_cfg.faction, err);
+                else err = "Steam is not available (start Kenshi from Steam) or the host could not be reached";
+            }
+            else ok = g_session.join(g_cfg.address, g_cfg.port, g_cfg.name, g_cfg.faction, err);
+        }
         else return;
         if (!ok)
         {
@@ -941,9 +963,24 @@ void onWorldReload()
     builds_onWorldReload();
 }
 
+// An invitation accepted (or "Join game" on a friend's profile, or Kenshi started by Steam for
+// it): join that player through Steam.
+void steamFrame()
+{
+    if (!steam_init()) return;
+    unsigned long long host = 0;
+    if (!steam_takeJoinRequest(host)) return;
+    char addr[40]; sprintf_s(addr, "steam:%llu", host);
+    g_cfg.address = addr;
+    log("steam: joining %s", addr);
+    showMessage(T("Joining your friend's game through Steam..."));
+    mp_start("join");
+}
+
 void mp_start(const std::string& mode)
 {
     if (g_session.active()) { g_session.stop(); forgetEveryone(); }
+    if (mode != "host") steam_onHosting(false, 0);
     g_cfg.mode = mode;
     g_permanentFailure = false;
     saveConfig();
@@ -953,6 +990,7 @@ void mp_start(const std::string& mode)
 void mp_leave()
 {
     if (g_session.active()) { g_session.stop(); forgetEveryone(); }
+    steam_leave();
     g_cfg.mode = "off";   // no automatic reconnection
     saveConfig();
     showMessage(T("Multiplayer: you left the session."));
@@ -1008,6 +1046,7 @@ void titleUpdate_hook(TitleScreen* self)
     lobby_titleButton(true);
     lobbyFrame();
     autotestClicks();
+    steamFrame();
 }
 
 // --- hook: GameWorld::mainLoop_GPUSensitiveStuff (once per frame) -----------------------------
@@ -1045,6 +1084,7 @@ void mainLoop_hook(GameWorld* thisptr, float time)
     if (GetTickCount() - g_lastLobbyTick > 100) { lobby_titleButton(false); lobbyFrame(); }   // in game (title screen hook idle)
     if (ou && ou->isPaused()) lobby_pauseButton();
     autotestClicks();   // character editor of a new test game
+    steamFrame();       // Steam callbacks, invitations accepted
 
     bool live = ready() && worldLoaded();
     if (live) chars_preFrame();

@@ -60,6 +60,9 @@ namespace
 
     // Diplomacy row buttons: "KMP_Dip_<player>_<w|p|a>"; applied from lobby_tick, never from the event.
     int g_dipPlayer = -1; float g_dipValue = 0;
+    bool g_friendsMode = false;                      // the panel lists Steam friends (invitations)
+    std::vector<unsigned long long> g_friendIds;     // row -> friend
+    unsigned long long g_inviteId = 0;               // invitation to send (from lobby_tick)
     MyGUI::Widget* g_dipPanel = NULL;
     std::string g_dipShown;   // signature of what the rows show (players + relations)
 
@@ -77,6 +80,13 @@ namespace
             g_dipPlayer = atoi(n.c_str() + 8);
             char k = n[n.size() - 1];
             g_dipValue = k == 'w' ? -100.f : k == 'a' ? 100.f : k == 't' ? 1000.f : 0.f;   // 't': trade
+            return;
+        }
+        if (n == "KMP_SteamFriends") { g_friendsMode = !g_friendsMode; g_dipShown.clear(); return; }
+        if (n.compare(0, 8, "KMP_Inv_") == 0)
+        {
+            size_t i = (size_t)atoi(n.c_str() + 8);
+            if (i < g_friendIds.size()) g_inviteId = g_friendIds[i];
             return;
         }
         if (n == "KMP_Host") g_action = HOST;
@@ -139,7 +149,7 @@ namespace
             MyGUI::Gui* gui = MyGUI::Gui::getInstancePtr();
             if (!gui) return false;
             const MyGUI::IntSize& view = MyGUI::RenderManager::getInstance().getViewSize();
-            const int H = 560 + DIP_ROWS * DIP_ROW_H - 40;
+            const int H = 560 + DIP_ROWS * DIP_ROW_H - 40 + (steam_available() ? 40 : 0);
             g_win = gui->createWidget<MyGUI::Window>("Kenshi_WindowCX", MyGUI::IntCoord((view.width - W) / 2, (view.height - H) / 2, W, H),
                                                      MyGUI::Align::Default, "Popup", "KenshiMP_Lobby");
             if (!g_win) return false;
@@ -160,6 +170,8 @@ namespace
             button(c, PAD + (bw + 8), y, bw, "Join", "KMP_Join");
             button(c, PAD + 2 * (bw + 8), y, bw, "Leave", "KMP_Leave");
             button(c, PAD + 3 * (bw + 8), y, bw, "Close", "KMP_Close");
+            if (steam_available()) button(c, PAD, y + 40, 2 * bw + 8, "Steam friends", "KMP_SteamFriends");
+            if (steam_available()) y += 40;
 
             g_status = c->createWidget<MyGUI::EditBox>("Kenshi_WordWrap",
                 MyGUI::IntCoord(PAD, y + 50, W - 2 * PAD - 16, 160), MyGUI::Align::Default);
@@ -247,6 +259,12 @@ namespace
             for (size_t i = 0; i < ps.size(); ++i)
                 s += "\n - " + ps[i].name + " (" + ps[i].faction + ")" + (ps[i].id == g_session.localId() ? T("  <- you") : "");
         }
+        if (steam_available())
+        {
+            s += "\n" + TF("Steam: %s. ", steam_personaName().c_str());
+            s += g_session.active() && g_session.isHost() ? T("Steam friends can join you: STEAM FRIENDS > INVITE, or \"Join game\" on your profile.")
+                                                         : T("Accept a friend's Steam invitation to join them (no address needed).");
+        }
         if (!g_lastError.empty()) s += "\n" + g_lastError;
         s += "\n" + TF("%s opens/closes this window. Enter = chat.", g_cfg.lobbyKeyName.c_str());
         // '#' starts a MyGUI colour code.
@@ -259,9 +277,53 @@ namespace
 namespace
 {
     // One row per other player: name, current standing, War / Peace / Ally.
+    // Steam friends, online ones first and those playing Kenshi on top, each with INVITE.
+    void refreshFriends()
+    {
+        std::vector<SteamFriend> all, rows;
+        steam_friends(all);
+        for (int pass = 0; pass < 2; ++pass)
+            for (size_t i = 0; i < all.size() && rows.size() < (size_t)DIP_ROWS; ++i)
+                if (all[i].online && all[i].inKenshi == (pass == 0)) rows.push_back(all[i]);
+        std::string sig = "friends:";
+        for (size_t i = 0; i < rows.size(); ++i) { char b[48]; sprintf_s(b, "%llu%d;", rows[i].id, (int)rows[i].inKenshi); sig += b; }
+        if (sig == g_dipShown) return;
+        g_dipShown = sig;
+        try
+        {
+            while (g_dipPanel->getChildCount() > 0) MyGUI::Gui::getInstance().destroyWidget(g_dipPanel->getChildAt(0));
+            g_friendIds.clear();
+            int w = g_dipPanel->getWidth(), bw = 110;
+            if (rows.empty())
+            {
+                MyGUI::TextBox* t = g_dipPanel->createWidget<MyGUI::TextBox>("Kenshi_TextboxStandardText", MyGUI::IntCoord(0, 0, w, DIP_ROW_H - 4), MyGUI::Align::Default);
+                t->setCaption(T("No Steam friend online."));
+                return;
+            }
+            for (size_t i = 0; i < rows.size(); ++i)
+            {
+                int y = (int)i * DIP_ROW_H;
+                g_friendIds.push_back(rows[i].id);
+                MyGUI::TextBox* t = g_dipPanel->createWidget<MyGUI::TextBox>("Kenshi_TextboxStandardText",
+                    MyGUI::IntCoord(0, y, w - bw - 6, DIP_ROW_H - 4), MyGUI::Align::Default);
+                std::string label = rows[i].name + (rows[i].inKenshi ? std::string(" - ") + T("in Kenshi") : std::string());
+                std::string esc;
+                for (size_t k = 0; k < label.size(); ++k) { if (label[k] == '#') esc += '#'; esc += label[k]; }
+                t->setCaption(MyGUI::UString(esc));
+                char name[32]; sprintf_s(name, "KMP_Inv_%d", (int)i);
+                MyGUI::Button* b = g_dipPanel->createWidget<MyGUI::Button>("Kenshi_Button1",
+                    MyGUI::IntCoord(w - bw, y, bw, DIP_ROW_H - 4), MyGUI::Align::Default, name);
+                b->setCaption(T("Invite"));
+                b->eventMouseButtonClick += MyGUI::newDelegate(onButton);
+            }
+        }
+        catch (...) {}
+    }
+
     void refreshDiplomacy()
     {
         if (!g_dipPanel) return;
+        if (g_friendsMode) { refreshFriends(); return; }
         std::vector<PlayerInfo> ps = g_session.players();
         std::string sig;
         std::vector<std::pair<PlayerInfo, float> > rows;
@@ -547,6 +609,12 @@ void lobby_tick()
         break;
     }
     swallowEscapePause();
+    if (g_inviteId)
+    {
+        unsigned long long who = g_inviteId; g_inviteId = 0;
+        if (!g_session.active() || !g_session.isHost()) mp_start("host");   // you invite: you host
+        showMessage(steam_invite(who) ? T("Steam invitation sent.") : T("Steam invitation failed."));
+    }
     if (g_dipPlayer >= 0)
     {
         int p = g_dipPlayer; g_dipPlayer = -1;

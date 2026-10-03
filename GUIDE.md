@@ -34,6 +34,12 @@ under the pause menu (Esc), or press **F4** at any time. The mod speaks the game
    missing / extra mods / different order, wrong password, host unreachable…
 5. **Leave** ends the session (no automatic reconnect). Your choices are saved in `kenshimp.cfg`:
    next launch, the connection is made again automatically.
+**Through Steam (easiest over the Internet, Steam copies of Kenshi):** no IP address, no port to
+open, no VPN. The host opens the Multiplayer window, presses **Host**, then **STEAM FRIENDS** and
+**INVITE** next to a friend (or the friend uses **Join game** on the host's Steam profile). The
+friend accepts the invitation and the game connects through Steam's network (direct when possible,
+Steam's relays otherwise). GOG copies keep the IP connection below.
+
 6. **Diplomacy and trading**: one line per player with **WAR / PEACE / ALLY / TRADE**.
    To trade, bring one of your characters next to one of theirs and click **TRADE**; the other
    player gets a message and clicks **ACCEPT** on your line. The game's trade window opens on

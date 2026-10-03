@@ -4,6 +4,8 @@
 #include "../core/ItemDiff.h"
 #include "../core/LoadSharing.h"
 #include "../core/Interp.h"
+#include "../core/Tunnel.h"
+#include <deque>
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
@@ -610,6 +612,79 @@ static void loadSharingTests()
     CHECK(flips <= 1);
 }
 
+// In-process stand-in for Steam's P2P network: two endpoints, reliable and ordered.
+struct FakeP2P
+{
+    CRITICAL_SECTION cs;
+    std::deque<std::pair<uint64_t, Bytes> > toA, toB;   // (from, message)
+    FakeP2P() { InitializeCriticalSection(&cs); }
+    ~FakeP2P() { DeleteCriticalSection(&cs); }
+};
+class FakeEnd : public P2PTransport
+{
+public:
+    FakeEnd(FakeP2P* n, bool a) : net(n), isA(a), closes(0) {}
+    bool send(uint64_t peer, const uint8_t* d, uint32_t size)
+    {
+        EnterCriticalSection(&net->cs);
+        (isA ? net->toB : net->toA).push_back(std::make_pair(isA ? (uint64_t)1 : (uint64_t)2, Bytes(d, d + size)));
+        LeaveCriticalSection(&net->cs);
+        return true;
+    }
+    bool receive(uint64_t& peer, Bytes& out)
+    {
+        EnterCriticalSection(&net->cs);
+        std::deque<std::pair<uint64_t, Bytes> >& q = isA ? net->toA : net->toB;
+        bool any = !q.empty();
+        if (any) { peer = q.front().first; out = q.front().second; q.pop_front(); }
+        LeaveCriticalSection(&net->cs);
+        return any;
+    }
+    void close(uint64_t) { ++closes; }
+    FakeP2P* net; bool isA; volatile long closes;
+};
+
+// The session over the tunnel: host endpoint A (peer id 1), client endpoint B (peer id 2).
+static void tunnelTests()
+{
+    FakeP2P net;
+    FakeEnd hostEnd(&net, true), clientEnd(&net, false);
+    Session host, client;
+    std::string err;
+    CHECK(host.host(47160, "TunnelHost", "Host Faction", err));
+    TunnelHost th; TunnelClient tc;
+    CHECK(th.start(&hostEnd, 47160, err));
+    CHECK(tc.start(&clientEnd, 1, err));
+    CHECK(tc.localPort() > 0);
+    CHECK(client.join("127.0.0.1", tc.localPort(), "TunnelClient", "Client Faction", err));
+    NetEvent e;
+    CHECK(waitEvent(client, NetEvent::EV_CONNECTED, e, 5000));
+    CHECK(waitEvent(host, NetEvent::EV_PLAYER_JOINED, e, 5000) && e.player.name == "TunnelClient");
+    CHECK(th.peers() == 1);
+    // both ways, and a big message (fragmented into many tunnel chunks) arrives intact
+    { ByteWriter w; w.str("hello through the tunnel"); client.send(MSG_CHAT, w.data); }
+    CHECK(waitEvent(host, NetEvent::EV_MESSAGE, e, 3000, MSG_CHAT));
+    { ByteReader r(e.body); CHECK(r.str() == "hello through the tunnel"); }
+    ByteWriter big; for (int i = 0; i < 50000; ++i) big.u32((uint32_t)i * 2654435761u);
+    host.send(MSG_CHAT, big.data);
+    CHECK(waitEvent(client, NetEvent::EV_MESSAGE, e, 5000, MSG_CHAT));
+    CHECK(e.body == big.data);
+    // client leaves: the host sees it, the tunnel stream is closed
+    client.stop();
+    CHECK(waitEvent(host, NetEvent::EV_PLAYER_LEFT, e, 5000));
+    Sleep(200);
+    CHECK(th.peers() == 0);
+    // the host leaves: the client's tunnel is told (BYE)
+    Session again;
+    CHECK(again.join("127.0.0.1", tc.localPort(), "TunnelClient", "Client Faction", err));
+    CHECK(waitEvent(again, NetEvent::EV_CONNECTED, e, 5000));
+    th.stop();
+    CHECK(waitEvent(again, NetEvent::EV_DISCONNECTED, e, 5000));
+    Sleep(200);
+    CHECK(tc.hostClosed());
+    again.stop(); tc.stop(); host.stop();
+}
+
 int main()
 {
     WSADATA wsa; WSAStartup(MAKEWORD(2, 2), &wsa);
@@ -618,6 +693,7 @@ int main()
     movementGuardTests();
     itemDiffTests();
     loadSharingTests();
+    tunnelTests();
     sanitizeTests();
     modListTests();
     passwordAndIdentityTests();

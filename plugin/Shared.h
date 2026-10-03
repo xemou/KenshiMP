@@ -162,7 +162,20 @@ void trade_onPlayerLeft(uint8_t id);
 void trade_onWorldReload();
 void trade_endAll();
 bool lobby_pressTitleButton(const char* suffix);   // test runs: click a title screen button by name
-void lobby_factionsTick();                          // diplomacy buttons in the game's Factions screen
+void lobby_factionsTick();
+
+// Steam.cpp: connections through Steam (no IP / port / VPN), invitations, "Join game"
+struct SteamFriend { unsigned long long id; std::string name; bool online, inKenshi; SteamFriend() : id(0), online(false), inKenshi(false) {} };
+bool steam_init();                                   // lazy, once Steam is up (no-op on GOG)
+bool steam_available();
+unsigned long long steam_myId();
+std::string steam_personaName();
+void steam_friends(std::vector<SteamFriend>& out);
+bool steam_invite(unsigned long long friendId);
+void steam_onHosting(bool hosting, int port);
+int steam_tunnelTo(unsigned long long host);         // local port for the session to join (0: failed)
+void steam_leave();
+bool steam_takeJoinRequest(unsigned long long& host);   // runs Steam callbacks; an invitation accepted?                          // diplomacy buttons in the game's Factions screen
 bool lobby_debugOpenFactions(uint8_t player, bool open);   // test: show that player's faction there
 std::string ground_debugGiveBag(Character* c);     // test: a backpack holding two items, put in c's inventory
 std::string ground_debugDropBag(Character* c);     // test: drop that backpack on the ground                         // close our trade window (and tell the partner)   // debug: first item out of a nearby remote backpack

@@ -33,7 +33,7 @@ Jouez à Kenshi entre amis. Chaque joueur garde son escouade, sa faction, sa bas
 [*] Abonnez-vous, cochez KenshiMP dans l'onglet Mods du lanceur. Le mode fenêtré sans bordure est conseillé.
 [*] Hôte : ouvrez la fenêtre Multijoueur (bouton sous le menu titre, ou F4), entrez votre nom et votre faction, cliquez Héberger, puis lancez ou chargez une partie. Donnez votre IP à vos amis.
 [*] Amis : même fenêtre, entrez l'adresse de l'hôte, cliquez Rejoindre, puis lancez une nouvelle partie (conseillé).
-[*] Par Internet : ouvrez le port TCP 47000 sur la box de l'hôte, ou utilisez un VPN de jeu gratuit comme Radmin VPN, ZeroTier ou Tailscale.
+[*] Par Internet : invitez vos amis par Steam (AMIS STEAM > INVITER dans la fenêtre Multijoueur, ou « Rejoindre la partie » sur votre profil) : ni adresse IP, ni port, ni VPN. Copies GOG : ouvrez le port TCP 47000 ou utilisez un VPN de jeu (Radmin, ZeroTier, Tailscale).
 [/olist]
 Les réglages sont enregistrés dans %LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg.
 

@@ -33,7 +33,7 @@ Play Kenshi with your friends. Every player keeps their own squad, faction, base
 [*] Subscribe, enable KenshiMP in the launcher's Mods tab. Borderless window mode is recommended.
 [*] Host: open the Multiplayer window (button under the title menu, or F4), enter your name and faction, click Host, then start or load a game. Give your IP to your friends.
 [*] Friends: same window, enter the host's address, click Join, then start a fresh game (recommended).
-[*] Over the Internet: open TCP port 47000 on the host's router, or use a free gaming VPN such as Radmin VPN, ZeroTier or Tailscale.
+[*] Over the Internet: invite your friends through Steam (STEAM FRIENDS > INVITE in the Multiplayer window, or "Join game" on your profile): no IP address, no port, no VPN. GOG copies: open TCP port 47000 or use a gaming VPN (Radmin, ZeroTier, Tailscale).
 [/olist]
 Settings are saved in %LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg.
 
