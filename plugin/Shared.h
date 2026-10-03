@@ -111,6 +111,7 @@ bool chars_isClaimed(Character* c);
 Character* chars_nextGhost(Character* after);
 std::string chars_debugShoot(Character* me);   // test: our character fires at a ghost   // cycles through the ghosts (debug camera)
 void chars_localCharacters(std::vector<std::pair<uint32_t, Character*> >& out);   // our replicated squad
+void chars_playerGhosts(std::vector<std::pair<uint32_t, Character*> >& out);      // other players' characters here
 Character* chars_ghostNear(uint8_t owner, const Ogre::Vector3& pos, float maxDist); // that player's nearest ghost
 bool chars_debugAttack(Character* attacker, Character* target);   // debug: attack order
 
@@ -244,5 +245,14 @@ void towns_onWorldReload();
 std::string towns_debugUnique();      // test: a unique NPC's id
 std::string towns_debugOverride();    // test: "townSid;overrideSid" for a far town that has another version
 std::string builds_debugTownDoor();   // test: "sid;x;y;z;door;doorCount" of a nearby town building
+
+// Bounties.cpp: crimes seen in the host's world reach the real character
+void bounties_tick(DWORD now);
+void bounties_onMessage(const mp::NetEvent& e);
+void bounties_resendAll();
+void bounties_onPlayerLeft(uint8_t id);
+void bounties_onWorldReload();
+std::string bounties_debugFaction();
+std::string bounties_debugCrimeOnGhost(const std::string& factionSid);
 
 } // namespace kmp

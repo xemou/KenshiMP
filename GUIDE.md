@@ -5,21 +5,28 @@ towns, and player factions can go to war with each other. The host owns the shar
 (NPCs, clock, pause).
 
 ## 1. Requirements (every player)
-- Kenshi **Steam or GOG 1.0.65 / 1.0.68** (no modified/cracked copy: RE_Kenshi refuses to run).
-- **RE_Kenshi 0.3.5**, installed with its installer.
-- **NVIDIA PhysX System Software 9.10.0513** installed (otherwise "PhysX start failure" when
-  starting a game), and Kenshi's PhysX DLLs copied next to `Kenshi\RE_Kenshi\Kenshi_x64.exe`
-  (PhysXCore64, PhysXCooking64, PhysXDevice64, PhysXLoader64, physxcudart_20, cudart64_30_9,
-  NxCharacter). Without them the game crashes when a game starts.
+- Kenshi from **Steam**, as Steam installs it (1.0.68): **nothing else is needed** (see §2).
+- Or Kenshi Steam/GOG with **RE_Kenshi 0.3.5** (RE_Kenshi runs the game as 1.0.65). GOG players need
+  RE_Kenshi: KenshiMP has no address table of its own for the GOG executable yet. With RE_Kenshi:
+  **NVIDIA PhysX System Software 9.10.0513** installed and Kenshi's PhysX DLLs copied next to
+  `Kenshi\RE_Kenshi\Kenshi_x64.exe` (PhysXCore64, PhysXCooking64, PhysXDevice64, PhysXLoader64,
+  physxcudart_20, cudart64_30_9, NxCharacter), otherwise the game crashes when a game starts.
+- Players with and without RE_Kenshi can play together.
 - **Exactly the same mod list**, in the same order (the host refuses otherwise, see
   `strict_mods`), and the **same KenshiMP version**.
 
 ## 2. Installation
-1. Copy the `dist\KenshiMP` folder into `Kenshi\mods\`.
-2. In the Kenshi launcher, Mods tab: tick **KenshiMP**.
-3. Settings live in `%LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg` (created on first launch from the
+1. Copy the `dist\KenshiMP` folder into `Kenshi\mods\` (or subscribe on the Steam Workshop).
+2. **Without RE_Kenshi**: run **`Enable KenshiMP.bat`** in that folder (for the Workshop:
+   `steamapps\workshop\content\233860\<item number>`) once. It adds KenshiMP's loader to the plugins
+   the game loads (`Plugins_x64.cfg`, a backup is kept); Workshop updates then need nothing else.
+   `Disable KenshiMP.bat` removes it. Single-player saves are not affected. The loader writes
+   `KenshiMP_loader.log` in the Kenshi folder (e.g. "not supported" on an unknown game version: the
+   game then simply starts without multiplayer). With RE_Kenshi installed this step is not needed.
+3. In the Kenshi launcher, Mods tab: tick **KenshiMP**.
+4. Settings live in `%LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg` (created on first launch from the
    mod's copy; see §4). The Multiplayer window (F4) is enough in most cases.
-4. Recommended: launcher → Video settings → **Borderless** (exclusive fullscreen pauses the game
+5. Recommended: launcher → Video settings → **Borderless** (exclusive fullscreen pauses the game
    on Alt+Tab → your squad freezes for the other players).
 
 ## 3. Playing

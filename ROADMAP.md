@@ -48,10 +48,10 @@ Status as of 2026-10-01. ✅ done and seen in game · 🧪 done, not yet seen in
 | Point | Status | Solution |
 |---|---|---|
 | World towns (destruction, captures) | 🧪 | Kenshi changes a town through "world states" (unique NPCs dead / jailed, a hidden table saved with the game) and the town's "override town" versions, chosen when its area loads. The host sends its world states and its changed towns (`MSG_WORLD_STATES`); clients write the states into their own table and switch the towns whose area is not loaded (the new version shows when the area loads, as in the base game). A client simulating its own surroundings (load sharing) reports its uniques' deaths to the host. Town buildings (🧪): a door broken by a client in the host's world is broken by the host (the hit is forwarded, no local damage), broken/repaired doors and destroyed buildings go from the host to everybody (`MSG_WORLD_BUILDINGS`, applied when the building is loaded); a client in its own world reports them to the host, which adopts them. NPCs killed by a client were already the host's (hits forwarded). Door locks are not synced (towns lock every door each night). Engine table found by disassembly, reached through a byte pattern (feature off and logged if not found). |
-| Bounties and crimes between players | 💡 | When a player is robbed or attacked by another, send the event to the victim's owner so they create the bounty on their side (their faction and town). |
+| Bounties and crimes | 🧪 | Kenshi keeps bounties per character. A crime a client commits in the host's world is seen by the host's NPCs and lands on the host's copy of that character: the host sends the increase to the owner, which adds it to its real character (the game's own bounty, guards, prisons). Every player sends the bounty table of its characters when it changes, so the guards of the other worlds know who is wanted. Between players: `assault_hostility` (attacking a player's characters lowers relations, war below zero). |
 | Host migration | 💡 | If the host leaves, the client with the lowest number becomes host: it keeps its game, the others reconnect to it (address known to all). NPCs become theirs. Simple on the network side; the reference world changes (the new host's). |
 
 ## Proposed order for what comes next
 1. Still to see in game: merchant money, connection message (client side), task animations, nearby NPCs.
 2. Diplomacy in the game's Factions screen (cosmetic).
-3. Real Internet game; world towns; bounties; host migration.
+3. Real Internet game (needs a second copy of the game).

@@ -60,6 +60,7 @@ namespace
         { "%s joined the game", "%s a rejoint la partie" },
         { "The world changed: %s (host's world).", "Le monde a changé : %s (monde de l'hôte)." },
         { "%d towns changed to match the host's world.", "%d villes ont changé pour suivre le monde de l'hôte." },
+        { "%s: bounty from %s (+%d), seen in the host's world.", "%s : prime de %s (+%d), vu dans le monde de l'hôte." },
         { "%s left the game", "%s a quitté la partie" },
         { "Multiplayer: %s", "Multijoueur : %s" },
         { "KenshiMP: %s = multiplayer window (host / join), Enter = chat.",

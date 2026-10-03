@@ -800,6 +800,17 @@ int main()
         WorldBuildingState bad; bad.sid = "x"; bad.x = 1e30f; CHECK(!bad.sanitize());
     }
 
+    // Bounty: a crime seen by the host's NPCs goes to the character's owner only.
+    {
+        ByteWriter w; w.u8(2); w.u16(1); w.u32(makeNetId(2, 4)); w.str("faction-x"); w.u32(300); w.u32(1u << 5);
+        host.sendTo(2, MSG_BOUNTY_CRIME, w.data);
+        NetEvent got, none;
+        CHECK(waitEvent(b, NetEvent::EV_MESSAGE, got, 3000, MSG_BOUNTY_CRIME));
+        ByteReader r(got.body);
+        CHECK(got.sender == HOST_ID && r.u8() == 2 && r.u16() == 1 && r.u32() == makeNetId(2, 4) && r.str() == "faction-x" && r.u32() == 300 && r.ok());
+        CHECK(!waitEvent(a, NetEvent::EV_MESSAGE, none, 300, MSG_BOUNTY_CRIME));
+    }
+
     // Item transfer: Carol loots one of Bob's characters -> only Bob gets it.
     {
         InvItem it; it.item = "katana"; it.manufacturer = "smith"; it.material = "steel"; it.quantity = 1; it.quality = 42.f;

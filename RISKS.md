@@ -65,7 +65,7 @@ Legend: ✅ handled (and how it is verified) · 🧪 coded and tested offline, *
 | 48 | Relations with world factions | ✅ | Table synced to the mirror faction. |
 | 49 | Name of a reused player slot | ✅ | Mirror faction renamed. |
 | 50 | Dialogues with a ghost NPC | 🟡 | Played locally; recruitment = ownership transfer. |
-| 51 | Bounties / crimes | 🟡 | Local to the player; their relations are reported to the host. |
+| 51 | Bounties / crimes | 🧪 | Crimes seen by the host's NPCs are added to the real character's bounty (`MSG_BOUNTY_CRIME`); each player's bounty table is copied onto its characters in the other worlds (`MSG_BOUNTIES`). Faction relation drops caused by a crime stay in the world where it was seen. |
 | 52 | Free-for-all war only | ✅ | F9/F10 target the player whose character is selected (engine selection list); chat `/war`, `/peace`, `/ally`. Seen in game: "You declared war on Bot". |
 
 ## 4. Combat and rendering

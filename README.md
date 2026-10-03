@@ -72,9 +72,11 @@ Windows SDK 7.1 ISO into `deps\vc2010`, KenshiLib headers from `deps\KenshiLib\I
 `deps\KenshiLib_Examples_deps\KenshiLib\Libraries` (KenshiLib.lib v0.5.1) and Boost 1.60.
 
 ## Installing
-1. Install RE_Kenshi (`deps\re_release\RE_Kenshi_installer.exe`) on a Steam/GOG Kenshi 1.0.65/1.0.68.
-2. Copy `dist\KenshiMP\` into `[Kenshi]\mods\`, edit `mods\KenshiMP\kenshimp.cfg`.
-3. Enable KenshiMP in the launcher's Mods tab. Host opens TCP port 47000.
+1. Copy `dist\KenshiMP\` into `[Kenshi]\mods\`.
+2. Stock Steam game (no RE_Kenshi): run `Enable KenshiMP.bat` there once (adds `KenshiMP_Loader` to
+   `Plugins_x64.cfg`, see [tools/README.md](tools/README.md)). With RE_Kenshi
+   (`deps\re_release\RE_Kenshi_installer.exe`, needed on GOG): nothing to do.
+3. Enable KenshiMP in the launcher's Mods tab.
 
 ## Documentation
 - [GUIDE.md](GUIDE.md) - install, usage, options, troubleshooting, limits

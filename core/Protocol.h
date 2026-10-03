@@ -16,7 +16,7 @@
 
 namespace mp {
 
-const uint32_t PROTOCOL_VERSION = 16;
+const uint32_t PROTOCOL_VERSION = 17;
 
 // World NPCs replicated by the host use the upper half of the host's local id space.
 const uint32_t NPC_ID_FLAG = 0x800000;
@@ -67,7 +67,9 @@ enum MsgType
     MSG_WORLD_STATES,     // h->c u16 n, {str uniqueNpcSid, u8 state (0 dead, 1 alive, 2 imprisoned), u8 playerInvolved}*, u16 m, {str townSid, str replacementTownSid}*
     MSG_WORLD_STATE_REPORT, // c->h u8 HOST_ID, then the states part of MSG_WORLD_STATES : changes in a client's own world (load sharing)
     MSG_WORLD_BUILDINGS,  // h->c u16 n, WorldBuildingState* : town buildings broken / repaired / destroyed in the host's world
-    MSG_WORLD_BUILDING_REPORT // c->h u8 HOST_ID, u8 kind: 0 = hit (WorldBuildingState with no doors, BuildingDamageMsg), 1 = u16 n, WorldBuildingState* (client's own world)
+    MSG_WORLD_BUILDING_REPORT, // c->h u8 HOST_ID, u8 kind: 0 = hit (WorldBuildingState with no doors, BuildingDamageMsg), 1 = u16 n, WorldBuildingState* (client's own world)
+    MSG_BOUNTIES,         // u32 charNetId, u16 n, {str factionSid, u32 amount, u32 crimeBits}* : the owner's bounties on that character (on change)
+    MSG_BOUNTY_CRIME      // h->owner u8 targetPlayer, u16 n, {u32 charNetId, str factionSid, u32 addedAmount, u32 newCrimeBits}* : crimes the host's NPCs saw
 };
 
 inline bool isRelayed(uint8_t t) { return t >= MSG_ENTITY_STATE; }

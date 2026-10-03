@@ -48,6 +48,7 @@ struct Rec { DWORD ms; uint8_t type; Bytes body; };
 // KMP_TEST_NEAR=1: the recorded NPCs are moved next to the client's character (its first state):
 // they then stand within the client's "near" radius (off-screen immunity test).
 static bool nearMode = false, haveClient = false, haveShift = false;
+static uint32_t clientChar = 0;
 static float clientPos[3], shift[3];
 static Bytes moveNear(uint8_t type, const Bytes& body)
 {
@@ -163,7 +164,13 @@ static int hostReplay(const char* file, int port, int seconds, const char* mods)
             else if (e.kind == NetEvent::EV_MESSAGE && e.msgType == MSG_ENTITY_STATE && !haveClient)
             {
                 ByteReader r(e.body); r.u32(); uint16_t n = r.u16();
-                if (n) { EntityState st; st.read(r); if (r.ok()) { clientPos[0] = st.x; clientPos[1] = st.y; clientPos[2] = st.z; haveClient = true; printf("[host] client character at (%.0f, %.0f, %.0f)\n", st.x, st.y, st.z); } }
+                if (n) { EntityState st; st.read(r); if (r.ok()) { clientChar = st.netId; clientPos[0] = st.x; clientPos[1] = st.y; clientPos[2] = st.z; haveClient = true; printf("[host] client character at (%.0f, %.0f, %.0f)\n", st.x, st.y, st.z); } }
+            }
+            else if (e.kind == NetEvent::EV_MESSAGE && e.msgType == MSG_BOUNTIES)
+            {
+                ByteReader r(e.body); uint32_t id = r.u32(); uint16_t n = r.u16();
+                printf("[host] bounties of %08x: %d faction(s)\n", id, (int)n);
+                for (uint16_t i = 0; i < n && r.ok(); ++i) { std::string f = r.str(); uint32_t a = r.u32(); uint32_t c = r.u32(); if (r.ok()) printf("[host]   %s: %u (crimes %x)\n", f.c_str(), a, c); }
             }
             else if (e.kind == NetEvent::EV_MESSAGE && e.msgType == MSG_DAMAGE)
             {
@@ -185,6 +192,16 @@ static int hostReplay(const char* file, int port, int seconds, const char* mods)
                 s.sendTo(joined, MSG_ZONE_MODE, w.data);
                 printf("[host] zone mode for player %d: %s\n", (int)joined, mode ? "shared" : "on its own");
             }
+        }
+        // Bounty test (game = client): our NPCs "saw" its character commit an assault at 40 s.
+        static bool crimeSent = false;
+        if (start && !crimeSent && clientChar && GetTickCount() - start >= 40000)
+        {
+            crimeSent = true;
+            std::string fac; envStr("KMP_TEST_FACTION", fac);
+            ByteWriter w; w.u8(joined); w.u16(1); w.u32(clientChar); w.str(fac); w.u32(300); w.u32(1u << 5);
+            s.sendTo(joined, MSG_BOUNTY_CRIME, w.data);
+            printf("[host] crime sent: %08x wanted by %s (+300)\n", clientChar, fac.c_str());
         }
         // Town tests (game = client): our world says the test unique is dead, the far town has
         // its other version and the town door next to the client is broken.
@@ -713,6 +730,24 @@ int main(int argc, char** argv)
             case MSG_WORLD_BUILDINGS:
                 printWorldBuildings("bot", e.body);
                 break;
+            case MSG_BOUNTY_CRIME:
+            {
+                static std::map<std::string, uint32_t> owed;   // "id|faction" -> total
+                uint8_t target = r.u8(); uint16_t n = r.u16();
+                for (uint16_t i = 0; i < n && r.ok(); ++i)
+                {
+                    uint32_t id = r.u32(); std::string f = r.str(); uint32_t a = r.u32(); uint32_t c = r.u32();
+                    if (!r.ok()) break;
+                    char key[300]; sprintf_s(key, "%08x|%s", id, f.c_str());
+                    uint32_t total = (owed[key] += a);
+                    printf("[bot] bounty crime from the host: %08x wanted by %s +%u (crimes %x), total %u\n", id, f.c_str(), a, c, total);
+                    ByteWriter w; w.u32(id); w.u16(1); w.str(f); w.u32(total); w.u32(c);
+                    s.send(MSG_BOUNTIES, w.data);
+                    printf("[bot] our bounty table for %08x sent (%s: %u)\n", id, f.c_str(), total);
+                }
+                (void)target;
+                break;
+            }
             case MSG_WORLD_STATES:
                 printWorldStates("bot", e.body);
                 break;

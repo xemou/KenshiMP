@@ -352,6 +352,7 @@ namespace
         builds_resendAll();
         ground_resendAll();
         towns_resendAll();
+        bounties_resendAll();
         if (ou && ou->player) sendFactionTable(true);
     }
 
@@ -392,6 +393,10 @@ namespace
         case MSG_WORLD_STATES:
         case MSG_WORLD_STATE_REPORT:
             towns_onMessage(e);
+            break;
+        case MSG_BOUNTIES:
+        case MSG_BOUNTY_CRIME:
+            bounties_onMessage(e);
             break;
         case MSG_GROUND_ITEM:
         case MSG_GROUND_REMOVE:
@@ -436,6 +441,7 @@ namespace
         items_onPlayerLeft(id);
         trade_onPlayerLeft(id);
         ground_onPlayerLeft(id);
+        bounties_onPlayerLeft(id);
         g_players.erase(id);
     }
 
@@ -595,6 +601,9 @@ namespace
         chars_localCharacters(locals);
         Character* me = locals.empty() ? NULL : locals[0].second;
         if (!me) return;
+        static bool crimeDone = false;   // host: our NPCs "saw" the other player's character commit a crime
+        if (!crimeDone && s >= 30 && g_session.isHost())
+        { crimeDone = true; log("autotest: crime on ghost -> %s", bounties_debugCrimeOnGhost(bounties_debugFaction()).c_str()); }
         if (step == 0 && s >= 2)
         {
             step = 1;
@@ -723,6 +732,7 @@ namespace
             log("autotest: town door %s", builds_debugTownDoor().c_str());
             log("autotest: unique %s", towns_debugUnique().c_str());
             log("autotest: town override %s", towns_debugOverride().c_str());
+            log("autotest: faction %s", bounties_debugFaction().c_str());
         }
 
         // Events are drained even when the session just died, so the disconnect is handled.
@@ -869,6 +879,7 @@ namespace
         trade_tick(now);
         weather_tick(now);
         towns_tick(now);
+        bounties_tick(now);
         ground_tick(now);
 
         // Network diagnostics (F7 in game, log every 30 s): ping, bandwidth, ghosts.
@@ -982,6 +993,7 @@ void onWorldReload()
     trade_onWorldReload();
     weather_onWorldReload();
     towns_onWorldReload();
+    bounties_onWorldReload();
     ground_onWorldReload();
     chat_onWorldReload();
     builds_onWorldReload();

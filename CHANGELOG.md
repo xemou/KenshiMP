@@ -15,11 +15,13 @@ Summary of what the first public build contains (fill in the final protocol numb
 - Damage authority model (attacker computes, victim's owner applies)
 - Shared host world: NPCs and animals around each player, clock, host-controlled pause, weather,
   world states of unique NPCs and the town changes they cause, town doors broken and town buildings
-  destroyed by any player (`town_sync`, protocol 16)
+  destroyed by any player (`town_sync`), bounties for crimes seen in the host's world (protocol 17)
 - Buildings and towns replicated both ways
 - Items: bodies, chests, worn backpacks, ground items, traders' stock and money, direct trade between players
 - Multiplayer window (title screen / pause menu / F4), chat, players on the world map, English + French
 - Robust networking: timeouts, auto-reconnect, version + mod list check, input validation
+- Runs without RE_Kenshi on the stock Steam game (loader + address table for 1.0.68,
+  `Enable KenshiMP.bat`); RE_Kenshi still supported, both kinds of players can play together
 - Settings in `%LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg`; the packaged template is `mode=off`
 
 Known limits: see `GUIDE.md` section 7 and `RISKS.md` (items marked as not yet validated in game).

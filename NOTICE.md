@@ -11,7 +11,9 @@ Lo-Fi Games. *Kenshi* is a trademark / property of Lo-Fi Games.
 | Component | Role | License |
 |---|---|---|
 | [KenshiLib](https://github.com/BFrizzleFoShizzle/KenshiLib) (BFrizzleFoShizzle) | Headers and import library used to call and hook the game's engine; linked into `KenshiMP.dll` | GPLv3 |
-| [RE_Kenshi](https://github.com/BFrizzleFoShizzle/RE_Kenshi) (BFrizzleFoShizzle) | Plugin loader that runs `KenshiMP.dll` (**not redistributed**: every player installs it themselves) | GPLv3 |
+| KenshiLib.dll (the build shipped with RE_Kenshi 0.3.5) | **Redistributed unmodified** in the package, used by `KenshiMP_Loader.dll` when RE_Kenshi is not installed. Source: <https://github.com/BFrizzleFoShizzle/KenshiLib> | GPLv3 |
+| [RE_Kenshi](https://github.com/BFrizzleFoShizzle/RE_Kenshi) (BFrizzleFoShizzle) | Optional plugin loader that runs `KenshiMP.dll` (not redistributed). KenshiMP's address table for the stock Steam 1.0.68 executable (`rva/`) is derived from RE_Kenshi's 1.0.65 table by `tools/rva/make_table.ps1` | GPLv3 |
+| Iced (0xd4d) | x86 disassembler used offline by `tools/rva/make_table.ps1` (not shipped) | MIT |
 | Boost 1.60 (headers / static libs used by KenshiLib's API) | Compile-time dependency | Boost Software License 1.0 |
 | MyGUI | In-game UI toolkit (the game's own copy is used at run time) | MIT |
 | OGRE | Rendering engine API used through KenshiLib (the game's own copy is used at run time) | MIT |
@@ -31,5 +33,8 @@ GPLv3 and **its complete corresponding source code is published** at
 
 ## Package content (what Steam players receive)
 
-`KenshiMP.dll`, `KenshiMP.mod`, `RE_Kenshi.json`, `kenshimp.cfg` (default template),
+`KenshiMP.dll`, `KenshiMP_Loader.dll`, `KenshiLib.dll`, `rva/RE_Kenshi/RVAs/Steam_1.0.65.br` (the
+stock Steam 1.0.68 table, under the name KenshiLib looks for), `Enable KenshiMP.bat`,
+`Disable KenshiMP.bat`, `kenshimp_enable.ps1`, `kenshimp_disable.ps1`, `KenshiMP.mod`,
+`RE_Kenshi.json`, `kenshimp.cfg` (default template),
 `README.md`, `GUIDE.md`, `RISKS.md`, `LICENSE`, `NOTICE.md`.

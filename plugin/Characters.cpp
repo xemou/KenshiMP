@@ -1557,6 +1557,16 @@ void chars_localCharacters(std::vector<std::pair<uint32_t, Character*> >& out)
     }
 }
 
+void chars_playerGhosts(std::vector<std::pair<uint32_t, Character*> >& out)
+{
+    for (std::map<uint32_t, Ghost>::iterator it = g_ghosts.begin(); it != g_ghosts.end(); ++it)
+    {
+        if (isNpcNetId(it->first)) continue;
+        Character* c = it->second.h.getCharacter();
+        if (c) out.push_back(std::make_pair(it->first, c));
+    }
+}
+
 Character* chars_ghostNear(uint8_t owner, const Ogre::Vector3& pos, float maxDist)
 {
     Character* best = NULL;
