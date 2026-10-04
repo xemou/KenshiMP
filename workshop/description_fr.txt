@@ -16,7 +16,8 @@ Jouez à Kenshi entre amis. Chaque joueur garde son escouade, sa faction, sa bas
 [*] Échange direct entre joueurs dans la fenêtre d'échange du jeu
 [*] Diplomatie : guerre / paix / alliance par joueur, depuis la fenêtre Multijoueur ou le chat (/guerre, /paix, /allie)
 [*] Chat (Entrée), autres joueurs sur la carte du monde, blessures, membres coupés et prothèses, faim
-[*] Fenêtre Multijoueur (écran titre, menu pause ou F4) : héberger ou rejoindre en deux clics ; en français et en anglais
+[*] Rejoindre par une invitation Steam, directement depuis l'écran titre : ni adresse IP, ni port, ni VPN
+[*] Fenêtre Multijoueur (écran titre, menu pause ou F4) dans le style du jeu, en français et en anglais
 [*] Rejoindre une partie déjà lancée : ALLER (ou /aller) amène votre escouade à côté de vos amis, où que votre sauvegarde l'ait laissée
 [*] Partage de charge en option (load_sharing=1, expérimental) : un joueur loin de l'hôte simule ses propres environs, le PC de l'hôte ne fait tourner que sa région
 [/list]
@@ -31,9 +32,9 @@ Jouez à Kenshi entre amis. Chaque joueur garde son escouade, sa faction, sa bas
 [h2]Comment jouer[/h2]
 [olist]
 [*] Abonnez-vous, puis cochez KenshiMP dans l'onglet Mods du lanceur. C'est tout (décochez-le pour rejouer en solo comme avant). Le mode fenêtré sans bordure est conseillé.
-[*] Hôte : ouvrez la fenêtre Multijoueur (bouton sous le menu titre, ou F4), entrez votre nom et votre faction, cliquez Héberger, puis lancez ou chargez une partie. Donnez votre IP à vos amis.
-[*] Amis : même fenêtre, entrez l'adresse de l'hôte, cliquez Rejoindre, puis lancez une nouvelle partie (conseillé). Ensuite ALLER à côté de l'hôte dans la fenêtre Multijoueur (ou tapez /aller) pour le retrouver.
-[*] Par Internet : invitez vos amis par Steam (AMIS STEAM > INVITER dans la fenêtre Multijoueur, ou « Rejoindre la partie » sur votre profil) : ni adresse IP, ni port, ni VPN. Copies GOG : ouvrez le port TCP 47000 ou utilisez un VPN de jeu (Radmin, ZeroTier, Tailscale).
+[*] Hôte : cliquez MULTIJOUEUR sous le menu titre (ou F4), puis HÉBERGER, puis AMIS STEAM > INVITER à côté de vos amis. Ensuite NOUVELLE PARTIE ou CONTINUER.
+[*] Amis : acceptez l'invitation Steam (ou « Rejoindre la partie » sur le profil Steam de l'hôte), puis NOUVELLE PARTIE (une partie neuve est conseillée) ou CONTINUER. Cliquez ALLER à côté de l'hôte dans la fenêtre Multijoueur (ou tapez /aller) pour le retrouver.
+[*] Sans Steam (copies GOG, réseau local, VPN) : PARAMÈTRES SUPPLÉMENTAIRES dans la fenêtre Multijoueur, entrez l'adresse, le port et le mot de passe de l'hôte, REJOINDRE PAR ADRESSE. L'hôte ouvre le port TCP 47000, ou vous utilisez un VPN de jeu (Radmin, ZeroTier, Tailscale).
 [/olist]
 Les réglages sont enregistrés dans %LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg.
 
@@ -46,7 +47,7 @@ Les réglages sont enregistrés dans %LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg
 [/list]
 
 [h2]Code source et licence[/h2]
-Logiciel libre sous licence GNU GPL v3 (il repose sur KenshiLib, lui aussi sous GPL v3).
+Projet de fan non officiel, sans lien avec Lo-Fi Games. Logiciel libre sous licence GNU GPL v3 (il repose sur KenshiLib, lui aussi sous GPL v3).
 Code source, guide complet et suivi des bugs : [url=https://github.com/xemou/KenshiMP]github.com/xemou/KenshiMP[/url]
 
 Signalez les bugs sur GitHub : tapez /rapport dans le chat (ou RAPPORT DE BUG dans la fenêtre Multijoueur), compressez le dossier créé sur votre Bureau et joignez-le.

@@ -29,6 +29,8 @@ Summary of what the first public build contains:
 - Multiplayer window (title screen / pause menu / F4), chat, players on the world map, English + French
 - Other players' names always shown above their characters, in their chat colour (`player_names`)
 - Robust networking: timeouts, auto-reconnect, version + mod list check, input validation
+- Steam first: join through a Steam invitation from the title screen, then NEW GAME or CONTINUE in
+  the Multiplayer window; address / port / password only under ADVANCED SETTINGS
 - Runs without RE_Kenshi on the stock Steam game (loader + address table for 1.0.68): subscribe and
   tick the mod, nothing to run (the game starts the loader as an interface plugin, no game file
   changed); RE_Kenshi still supported, both kinds of players can play together

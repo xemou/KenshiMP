@@ -1,5 +1,8 @@
 v18 - first public beta (protocol 18)
 
+- Nothing to install: subscribe, tick KenshiMP in the launcher, play (no RE_Kenshi needed on Steam)
+- Join through a Steam invitation from the title screen, then NEW GAME or CONTINUE; IP / port / password
+  only under ADVANCED SETTINGS (GOG, LAN, VPN)
 - Co-op & PvP multiplayer for Kenshi, up to 8 players, host's world shared (NPCs, time, weather, towns)
 - Join a game already running: GO TO in the Multiplayer window (or /goto) brings your squad next to a friend
 - Town chests hold the same things for everybody; looting is validated by the host

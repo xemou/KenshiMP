@@ -24,10 +24,10 @@ Legend: [x] done (non-code, verified in the repo) · [ ] to do · (you) = only t
 
 ## 3. Steam page
 - [x] Description EN (`workshop/description_en.txt`) and FR (`workshop/description_fr.txt`)
-- [x] Preview image `workshop/preview.png` (512×512, < 1 MB)
+- [x] Preview image `workshop/preview.png` (512×512, < 1 MB, real capture, no "Requires RE_Kenshi" anymore)
 - [x] Description reviewed against the v18 features (8 players, GO TO, town chests, version in the window title)
 - [x] "BETA / back up your saves" line at the top of the description
-- [ ] 4-6 extra screenshots (list in `ASSETS.md`)
+- [x] 4 extra screenshots in `workshop/screenshots/` (in game, English UI, cursor removed); preview remade from a real capture (two players)
 - [x] Change notes ready (`workshop/changenotes.txt`, `CHANGELOG.md` v18); [ ] title and tags (you)
 - [ ] Steam Workshop legal agreement accepted (you)
 - [ ] Link to RE_Kenshi (Nexus) in the Requirements (optional on Steam, needed on GOG)

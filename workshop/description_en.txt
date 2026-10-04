@@ -16,7 +16,8 @@ Play Kenshi with your friends. Every player keeps their own squad, faction, base
 [*] Direct trading between players in the game's own trade window
 [*] Diplomacy: war / peace / alliance per player, from the Multiplayer window or the chat (/war, /peace, /ally)
 [*] Chat (Enter), other players on the world map, injuries, lost limbs and prosthetics, hunger
-[*] Multiplayer window (title screen, pause menu or F4): host or join in two clicks; English and French
+[*] Join through a Steam invitation, straight from the title screen: no IP address, no port, no VPN
+[*] Multiplayer window (title screen, pause menu or F4) in the game's style, English and French
 [*] Join a game already running: GO TO (or /goto) brings your squad next to your friends wherever your save left it
 [*] Optional load sharing (load_sharing=1, experimental): a player far from the host simulates their own surroundings, so the host's PC only runs its own region
 [/list]
@@ -31,9 +32,9 @@ Play Kenshi with your friends. Every player keeps their own squad, faction, base
 [h2]How to play[/h2]
 [olist]
 [*] Subscribe, then tick KenshiMP in the launcher's Mods tab. That is all (untick it to play single-player as before). Borderless window mode is recommended.
-[*] Host: open the Multiplayer window (button under the title menu, or F4), enter your name and faction, click Host, then start or load a game. Give your IP to your friends.
-[*] Friends: same window, enter the host's address, click Join, then start a fresh game (recommended). Then GO TO next to the host in the Multiplayer window (or type /goto) to meet them.
-[*] Over the Internet: invite your friends through Steam (STEAM FRIENDS > INVITE in the Multiplayer window, or "Join game" on your profile): no IP address, no port, no VPN. GOG copies: open TCP port 47000 or use a gaming VPN (Radmin, ZeroTier, Tailscale).
+[*] Host: click MULTIPLAYER under the title menu (or press F4), then HOST, then STEAM FRIENDS > INVITE next to your friends. Then NEW GAME or CONTINUE.
+[*] Friends: accept the Steam invitation (or "Join game" on the host's Steam profile), then NEW GAME (a fresh game is recommended) or CONTINUE. Click GO TO next to the host in the Multiplayer window (or type /goto) to meet them.
+[*] Without Steam (GOG copies, LAN, VPN): ADVANCED SETTINGS in the Multiplayer window, enter the host's address, port and password, JOIN BY ADDRESS. The host opens TCP port 47000 or you use a gaming VPN (Radmin, ZeroTier, Tailscale).
 [/olist]
 Settings are saved in %LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg.
 
@@ -46,7 +47,7 @@ Settings are saved in %LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg.
 [/list]
 
 [h2]Source code & license[/h2]
-Free software under the GNU GPL v3 (it is built on KenshiLib, also GPL v3).
+Unofficial fan project, not affiliated with Lo-Fi Games. Free software under the GNU GPL v3 (it is built on KenshiLib, also GPL v3).
 Source code, full guide and issue tracker: [url=https://github.com/xemou/KenshiMP]github.com/xemou/KenshiMP[/url]
 
 Please report bugs on GitHub: type /report in the chat (or BUG REPORT in the Multiplayer window), zip the folder it creates on your desktop and attach it.
