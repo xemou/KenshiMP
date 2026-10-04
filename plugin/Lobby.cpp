@@ -26,9 +26,15 @@ namespace
     MyGUI::Window* g_win = NULL;
     MyGUI::EditBox *g_name = NULL, *g_faction = NULL, *g_address = NULL, *g_port = NULL, *g_password = NULL;
     MyGUI::EditBox* g_status = NULL;
-    enum Action { NONE, HOST, JOIN, LEAVE, CLOSE, ADVANCED };
+    enum Action { NONE, HOST, JOIN, LEAVE, CLOSE, ADVANCED, TITLE_NEW, TITLE_CONTINUE };
     Action g_action = NONE;                 // widgets are never destroyed from their own events
     bool g_advanced = false;                // "Advanced settings" open: address, port, password, Join by address
+    bool g_onTitle = false;                 // the title screen is showing (its MULTIPLAYER button is up)
+    bool g_playRow = false;                 // the window shows NEW GAME / CONTINUE (in a session, on the title screen)
+    // NEW GAME / CONTINUE from the window: the game's own title buttons, pressed one after the other
+    // (by name, as a click would) once each appears. Loading a save straight from the title crashes
+    // the game, so only these buttons are used.
+    const char* const* g_titleSeq = NULL; int g_titleSeqN = 0, g_titleSeqStep = 0; DWORD g_titleSeqAt = 0, g_titleSeqStart = 0;
     DWORD g_lastStatus = 0;
     std::string g_lastError;
 
@@ -96,6 +102,8 @@ namespace
         if (n == "KMP_Host") g_action = HOST;
         else if (n == "KMP_Join") g_action = JOIN;
         else if (n == "KMP_Advanced") g_action = ADVANCED;
+        else if (n == "KMP_NewGame") g_action = TITLE_NEW;
+        else if (n == "KMP_Continue") g_action = TITLE_CONTINUE;
         else if (n == "KMP_Leave") g_action = LEAVE;
         else if (n == "KMP_Close") g_action = CLOSE;
     }
@@ -156,7 +164,8 @@ namespace
             const MyGUI::IntSize& view = MyGUI::RenderManager::getInstance().getViewSize();
             // Steam first (friends, invitations); the network settings hide behind "Advanced settings".
             const int advExtra = g_advanced ? 3 * ROW + 46 : 0;
-            const int fixedH = PAD + 2 * ROW + 6 + 2 * 40 + advExtra + 14 + 168 + 68;
+            g_playRow = g_onTitle && g_session.active();
+            const int fixedH = PAD + 2 * ROW + 6 + (g_playRow ? 3 : 2) * 40 + advExtra + 14 + 168 + 68;
             // small screens (720 p): fewer player rows rather than a window taller than the screen
             g_dipRows = DIP_ROWS;
             while (g_dipRows > 2 && fixedH + g_dipRows * DIP_ROW_H > view.height) --g_dipRows;
@@ -187,6 +196,12 @@ namespace
                 button(c, PAD + 2 * (bw + 8), y, 2 * bw + 8, "Leave", "KMP_Leave");
             }
             y += 40;
+            if (g_playRow)   // in a session on the title screen: get into a world
+            {
+                button(c, PAD, y, 2 * bw + 8, "New game", "KMP_NewGame");
+                button(c, PAD + 2 * (bw + 8), y, 2 * bw + 8, "Continue", "KMP_Continue");
+                y += 40;
+            }
             button(c, PAD, y, 2 * bw + 8, g_advanced ? "Hide advanced settings" : "Advanced settings", "KMP_Advanced");
             button(c, PAD + 2 * (bw + 8), y, bw, "Bug report", "KMP_Report");
             button(c, PAD + 3 * (bw + 8), y, bw, "Close", "KMP_Close");
@@ -287,7 +302,12 @@ namespace
                 if (!g_localIps.empty()) s += TF(" This PC: %s.", g_localIps.c_str());
                 s += std::string("\n") + T("Friends on your network/VPN (Radmin, ZeroTier, Tailscale) join with one of these addresses; over the Internet use your public IP and forward the TCP port on your router.");
             }
-            if (!ou || !ou->player || ou->player->playerCharacters.size() == 0) s += std::string("\n") + T("Start or load a game: players join your world.");
+            if (!ou || !ou->player || ou->player->playerCharacters.size() == 0)
+                s += std::string("\n") + (g_onTitle ? T("NEW GAME or CONTINUE: players join your world.") : T("Start or load a game: players join your world."));
+        }
+        else if (!ready() && g_onTitle)
+        {
+            s = TF("Connected to %s. Now NEW GAME or CONTINUE: you arrive in the host's world once your game is loaded.", g_cfg.address.c_str());
         }
         else if (!ready())
         {
@@ -423,6 +443,7 @@ namespace
 // screen like the menu itself).
 void lobby_titleButton(bool show)
 {
+    g_onTitle = show;
     if (show == (g_titleButton != NULL)) return;
     try
     {
@@ -654,6 +675,21 @@ void lobby_tick()
         destroy();
         create();
         return;
+    case TITLE_NEW:
+    case TITLE_CONTINUE:
+    {
+        // NEW GAME: the game's start choice (default start), then its character editor is the
+        // player's. CONTINUE: the last save. Our window closes so the game's screens show.
+        static const char* const newGame[] = { "NewGameButton", "BeginButton" };
+        static const char* const resume[] = { "ContinueButton" };
+        keepFields();
+        g_titleSeq = a == TITLE_NEW ? newGame : resume;
+        g_titleSeqN = a == TITLE_NEW ? 2 : 1;
+        g_titleSeqStep = 0; g_titleSeqAt = 0; g_titleSeqStart = GetTickCount();
+        log("lobby: %s pressed on the title screen", a == TITLE_NEW ? "NEW GAME" : "CONTINUE");
+        destroy();
+        return;
+    }
     case CLOSE:
         destroy();
         return;
@@ -661,6 +697,27 @@ void lobby_tick()
         break;
     }
     swallowEscapePause();
+    if (g_titleSeq)
+    {
+        DWORD now = GetTickCount();
+        if (now - g_titleSeqAt >= 700)
+        {
+            g_titleSeqAt = now;
+            if (lobby_pressTitleButton(g_titleSeq[g_titleSeqStep]))
+            {
+                log("lobby: pressed %s", g_titleSeq[g_titleSeqStep]);
+                if (++g_titleSeqStep >= g_titleSeqN) g_titleSeq = NULL;
+            }
+            else if (now - g_titleSeqStart > 20000)
+            {
+                log("lobby: %s not found", g_titleSeq[g_titleSeqStep]);
+                if (g_titleSeq[g_titleSeqStep][0] == 'C') showMessage(T("No game to continue: use NEW GAME."));
+                g_titleSeq = NULL;
+            }
+        }
+    }
+    // joined or left while the window is open on the title screen: NEW GAME / CONTINUE appear or go
+    if (g_win && g_playRow != (g_onTitle && g_session.active())) { keepFields(); destroy(); create(); return; }
     if (g_inviteId)
     {
         unsigned long long who = g_inviteId; g_inviteId = 0;

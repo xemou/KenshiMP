@@ -163,6 +163,7 @@ static int hostReplay(const char* file, int port, int seconds, const char* mods)
 
     Session s; std::string err;
     s.setModList(mods, true);
+    { char pw[128]; size_t pl = 0; if (getenv_s(&pl, pw, sizeof(pw), "KMP_BOT_PASSWORD") == 0 && pl > 1) { s.setPassword(pw); printf("[host] session password set\n"); } }
     if (!s.host(port, "ReplayHost", "Host World", err)) { printf("host failed: %s\n", err.c_str()); return 1; }
     DWORD t0 = GetTickCount(), start = 0;
     size_t next = 0;
