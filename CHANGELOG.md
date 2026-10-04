@@ -8,7 +8,7 @@ in `core/Protocol.h`.
 ## [v18] - first Workshop release (beta), protocol 18
 
 Date: the day of the upload (write it here, and the Workshop item ID below, once published).
-Workshop item ID: (to fill)
+Workshop item ID: 3813505705 (https://steamcommunity.com/sharedfiles/filedetails/?id=3813505705)
 
 Summary of what the first public build contains:
 

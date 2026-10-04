@@ -46,7 +46,10 @@ Workshop legal agreement cannot be automated).
 4. Then switch the visibility to **Public**.
 
 ## Updates
-1. Rebuild (`package.bat`), copy `dist\KenshiMP` to `Kenshi\mods\KenshiMP`.
+1. Rebuild (`package.bat`), then `tools\install_local.ps1`: copies `dist\KenshiMP` to
+   `Kenshi\mods\KenshiMP` but keeps the Game Editor's own files there (`KenshiMP.mod`,
+   `_KenshiMP.info` = item id / title / tags / visibility, `_KenshiMP.img` = preview). Never wipe
+   that folder: the editor would no longer know the item.
 2. Game Editor → open KenshiMP → **Steam Workshop** → update the existing item, with a short change
    note (start from `workshop/changenotes.txt`; give the protocol version: players on different
    versions cannot play together, Steam updates everybody automatically).
