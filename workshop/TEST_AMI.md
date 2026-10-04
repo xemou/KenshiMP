@@ -13,8 +13,7 @@ humain (seulement par le bot), c'est le test le plus important. Comptez 1 h à 1
    `tests\test_client.bat` (le bot joue l'hôte). Tout ce qui casse là cassera chez votre ami.
 
 ## 1. Installation chez l'ami (chronométrez : c'est l'expérience d'un nouveau joueur)
-1. Il s'abonne, ouvre le dossier `steamapps\workshop\content\233860\<numéro>` et lance
-   **Enable KenshiMP.bat**.
+1. Il s'abonne (rien d'autre à lancer).
 2. Lanceur de Kenshi → onglet Mods → coche **KenshiMP** (même liste de mods que vous, même ordre).
 3. Paramètres vidéo : **Sans bordure**.
 4. Écran titre : le bouton **MULTIJOUEUR** est là, F4 ouvre la fenêtre, le titre affiche **v18**.

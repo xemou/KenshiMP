@@ -20,17 +20,14 @@ monde partagé (PNJ, horloge, pause).
 
 ## 2. Installation
 1. Copiez le dossier `dist\KenshiMP` dans `Kenshi\mods\` (ou abonnez-vous sur le Workshop Steam).
-2. **Sans RE_Kenshi** : lancez une fois **`Enable KenshiMP.bat`** dans ce dossier (pour le Workshop :
-   `steamapps\workshop\content\233860\<numéro de l'objet>`). Il ajoute le chargeur de KenshiMP aux
-   plugins que charge le jeu (`Plugins_x64.cfg`, une copie de sauvegarde est gardée) ; les mises à
-   jour du Workshop ne demandent ensuite rien de plus. `Disable KenshiMP.bat` le retire. Les
-   sauvegardes solo ne sont pas touchées. Le chargeur écrit `KenshiMP_loader.log` dans le dossier
-   de Kenshi (par exemple « not supported » sur une version du jeu inconnue : le jeu démarre alors
-   simplement sans multijoueur). Avec RE_Kenshi installé, cette étape est inutile.
-3. Dans le lanceur de Kenshi, onglet Mods : cochez **KenshiMP**.
-4. Les réglages sont dans `%LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg` (créé au premier lancement
+2. Dans le lanceur de Kenshi, onglet Mods : cochez **KenshiMP**. C'est tout, rien à lancer : le jeu
+   démarre KenshiMP tout seul tant que le mod est coché, et aucun fichier du jeu n'est modifié
+   (décochez-le pour jouer sans). Les sauvegardes solo ne sont pas touchées. Sans RE_Kenshi, le
+   chargeur de KenshiMP écrit `KenshiMP_loader.log` dans le dossier de Kenshi (par exemple « not
+   supported » sur une version du jeu inconnue : le jeu démarre alors simplement sans multijoueur).
+3. Les réglages sont dans `%LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg` (créé au premier lancement
    à partir de la copie du mod ; voir §4). La fenêtre Multijoueur (F4) suffit dans la plupart des cas.
-5. Conseillé : lanceur → Paramètres vidéo → **Sans bordure** (le plein écran exclusif met le jeu en
+4. Conseillé : lanceur → Paramètres vidéo → **Sans bordure** (le plein écran exclusif met le jeu en
    pause sur Alt+Tab → votre escouade se fige pour les autres joueurs).
 
 ## 3. Jouer
@@ -130,7 +127,7 @@ Tout peut aussi se régler à la main dans `kenshimp.cfg` :
 | Symptôme | Cause / solution |
 |---|---|
 | Plantage « PhysX start failure » au lancement d'une partie (avec RE_Kenshi) | installez PhysX 9.10.0513 + copiez les DLL PhysX (§1) |
-| Pas de bouton MULTIJOUEUR, rien dans les journaux (sans RE_Kenshi) | relancez `Enable KenshiMP.bat` (après avoir déplacé le mod, ou si un autre outil a réécrit `Plugins_x64.cfg`) |
+| Pas de bouton MULTIJOUEUR, rien dans les journaux (sans RE_Kenshi) | KenshiMP n'est pas coché dans le lanceur ; ou un autre mod remplace `gui\core\core_settings.xml` (`MyGUI.log` dans le dossier de Kenshi doit contenir « Loading library ...KenshiMP_Loader.dll ») : décochez ce mod, ou installez RE_Kenshi |
 | `KenshiMP_loader.log` : « not supported without RE_Kenshi » | Kenshi a été mis à jour par Steam (nouvel exécutable) : attendez une mise à jour de KenshiMP, ou installez RE_Kenshi |
 | Journal : « Incorrect address in KenshiLib::GetRealAddress » | DLL compilée sans /GL /LTCG (utilisez `package.bat`) |
 | « connection … timed out / refused » | hôte non lancé, mauvaise IP, port fermé (box / pare-feu) → VPN de jeu |

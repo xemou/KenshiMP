@@ -1,7 +1,9 @@
 // KenshiMP_Loader.dll: starts KenshiMP without RE_Kenshi.
 //
-// Kenshi's engine (Ogre) loads the plugins listed in Plugins_x64.cfg at startup and calls their
-// dllStartPlugin(); "Enable KenshiMP.bat" adds this loader there. The loader then:
+// Kenshi's interface library (MyGUI) loads the plugins listed in its settings files and calls their
+// dllStartPlugin(); the mod's gui\core\core_settings.xml lists this loader (Kenshi reads the gui
+// folder of every enabled mod), so ticking KenshiMP in the launcher is enough. The same entry point
+// also works from Ogre's Plugins_x64.cfg. The loader then:
 //  1. does nothing if RE_Kenshi is in the game (RE_Kenshi starts KenshiMP itself, RE_Kenshi.json);
 //  2. recognises the executable (MD5): the stock Steam 1.0.68 build uses the address table shipped
 //     with KenshiMP (rva\RE_Kenshi\RVAs\Steam_1.0.65.br, made by matching the 1.0.65 functions in
@@ -102,6 +104,13 @@ namespace
         if (GetModuleHandleW(L"RE_Kenshi.dll"))
         {
             log("RE_Kenshi is loaded: it starts KenshiMP itself, nothing to do here.");
+            return;
+        }
+        // Started once only: the loader can be reached twice (MyGUI plugin list of the mod's
+        // gui folder and Plugins_x64.cfg, or a local copy and the Workshop copy).
+        if (GetModuleHandleW(L"KenshiMP.dll"))
+        {
+            log("KenshiMP is already started (another copy of the loader), nothing to do here.");
             return;
         }
         std::wstring dir = moduleDir();

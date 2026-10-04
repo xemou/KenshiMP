@@ -34,7 +34,7 @@ GPLv3 and **its complete corresponding source code is published** at
 ## Package content (what Steam players receive)
 
 `KenshiMP.dll`, `KenshiMP_Loader.dll`, `KenshiLib.dll`, `rva/RE_Kenshi/RVAs/Steam_1.0.65.br` (the
-stock Steam 1.0.68 table, under the name KenshiLib looks for), `Enable KenshiMP.bat`,
-`Disable KenshiMP.bat`, `kenshimp_enable.ps1`, `kenshimp_disable.ps1`, `KenshiMP.mod`,
+stock Steam 1.0.68 table, under the name KenshiLib looks for), `gui/core/core_settings.xml` (the
+game's two interface settings plus the MyGUI plugin entry that starts the loader), `KenshiMP.mod`,
 `RE_Kenshi.json`, `kenshimp.cfg` (default template),
 `README.md`, `GUIDE.md`, `GUIDE_FR.md`, `RISKS.md`, `LICENSE`, `NOTICE.md`.

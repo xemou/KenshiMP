@@ -7,8 +7,7 @@ if (-not $Dir) { Write-Host "check: package folder not found (run package.bat)";
 
 # 1. Files players need (see NOTICE.md / RELEASE_CHECKLIST.md)
 $required = 'KenshiMP.dll', 'KenshiMP.mod', 'RE_Kenshi.json', 'kenshimp.cfg', 'KenshiMP_Loader.dll', 'KenshiLib.dll',
-            'rva\RE_Kenshi\RVAs\Steam_1.0.65.br', 'Enable KenshiMP.bat', 'Disable KenshiMP.bat',
-            'kenshimp_enable.ps1', 'kenshimp_disable.ps1', 'README.md', 'GUIDE.md', 'GUIDE_FR.md', 'RISKS.md', 'LICENSE', 'NOTICE.md'
+            'rva\RE_Kenshi\RVAs\Steam_1.0.65.br', 'gui\core\core_settings.xml', 'README.md', 'GUIDE.md', 'GUIDE_FR.md', 'RISKS.md', 'LICENSE', 'NOTICE.md'
 foreach ($f in $required) { if (-not (Test-Path (Join-Path $Dir $f))) { $problems += "missing: $f" } }
 
 # 2. Nothing from the game or RE_Kenshi is redistributed
@@ -39,6 +38,15 @@ if (Test-Path $cfgPath) {
 # 4. RE_Kenshi.json loads the plugin
 $json = Join-Path $Dir 'RE_Kenshi.json'
 if ((Test-Path $json) -and -not ((Get-Content $json -Raw) -match '"KenshiMP\.dll"')) { $problems += "RE_Kenshi.json does not list KenshiMP.dll" }
+
+# 4b. The game starts the loader through MyGUI (no Plugins_x64.cfg change, nothing to run)
+$gx = Join-Path $Dir 'gui\core\core_settings.xml'
+if (Test-Path $gx) {
+    $x = Get-Content $gx -Raw
+    if ($x -notmatch 'type="Plugin"' -or $x -notmatch 'mods/KenshiMP/KenshiMP_Loader\.dll') { $problems += "gui\core\core_settings.xml does not list the loader" }
+    if ($x -notmatch 'Kenshi_StandardFont_Medium' -or $x -notmatch 'type="Pointer"') { $problems += "gui\core\core_settings.xml lost the game's own settings" }
+    if ($x -notmatch 'workshop/content/233860/\d+/') { Write-Host "check: note - no Workshop path in gui\core\core_settings.xml yet (workshop\item_id.txt, see UPLOAD.md)" }
+}
 
 # 5. Version: the DLL is newer than the sources it should come from
 $dll = Join-Path $Dir 'KenshiMP.dll'

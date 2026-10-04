@@ -4,7 +4,7 @@
 
 Jouez à Kenshi entre amis. Chaque joueur garde son escouade, sa faction, sa base et ses villes ; vous voyez les persos des autres se déplacer, combattre, construire et échanger en temps réel. Les factions des joueurs peuvent être en paix, alliées ou en guerre.
 
-[b]C'est un plugin de code : après l'abonnement, lancez une fois « Enable KenshiMP.bat » (voir Comment jouer). Pas besoin de RE_Kenshi sur Steam.[/b]
+[b]Abonnez-vous, cochez KenshiMP dans le lanceur, jouez : rien à installer ni à lancer, aucun fichier du jeu modifié. Pas besoin de RE_Kenshi sur Steam.[/b]
 
 [h2]Fonctionnalités[/h2]
 [list]
@@ -30,7 +30,7 @@ Jouez à Kenshi entre amis. Chaque joueur garde son escouade, sa faction, sa bas
 
 [h2]Comment jouer[/h2]
 [olist]
-[*] Abonnez-vous. Sans RE_Kenshi : ouvrez le dossier du mod (steamapps\workshop\content\233860\<numéro de l'objet>) et lancez une fois « Enable KenshiMP.bat » (« Disable KenshiMP.bat » l'annule ; le solo n'est pas touché). Puis cochez KenshiMP dans l'onglet Mods du lanceur. Le mode fenêtré sans bordure est conseillé.
+[*] Abonnez-vous, puis cochez KenshiMP dans l'onglet Mods du lanceur. C'est tout (décochez-le pour rejouer en solo comme avant). Le mode fenêtré sans bordure est conseillé.
 [*] Hôte : ouvrez la fenêtre Multijoueur (bouton sous le menu titre, ou F4), entrez votre nom et votre faction, cliquez Héberger, puis lancez ou chargez une partie. Donnez votre IP à vos amis.
 [*] Amis : même fenêtre, entrez l'adresse de l'hôte, cliquez Rejoindre, puis lancez une nouvelle partie (conseillé). Ensuite ALLER à côté de l'hôte dans la fenêtre Multijoueur (ou tapez /aller) pour le retrouver.
 [*] Par Internet : invitez vos amis par Steam (AMIS STEAM > INVITER dans la fenêtre Multijoueur, ou « Rejoindre la partie » sur votre profil) : ni adresse IP, ni port, ni VPN. Copies GOG : ouvrez le port TCP 47000 ou utilisez un VPN de jeu (Radmin, ZeroTier, Tailscale).

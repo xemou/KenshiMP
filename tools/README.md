@@ -2,9 +2,17 @@
 
 ## Playing without RE_Kenshi
 
-`plugin/Loader.cpp` builds `KenshiMP_Loader.dll`, a plugin of Kenshi's engine (Ogre): the engine
-loads every plugin listed in `Plugins_x64.cfg` when the game starts. `kenshimp_enable.ps1`
-(run by `Enable KenshiMP.bat`) adds the loader there; `kenshimp_disable.ps1` removes it.
+`plugin/Loader.cpp` builds `KenshiMP_Loader.dll`. Nothing has to be run by the player: Kenshi adds
+the `gui` folders of every enabled mod to the resources of its interface library (MyGUI), and the
+package's `gui\core\core_settings.xml` (written by `make_gui_xml.ps1`) replaces the game's own file
+of that name with the same two settings plus a MyGUI plugin list. MyGUI loads the loader from there
+at startup and calls its `dllStartPlugin()`. The list holds the local path
+(`mods/KenshiMP/KenshiMP_Loader.dll`) and, once `workshop\item_id.txt` exists, the Workshop path
+(`../../workshop/content/233860/<id>/KenshiMP_Loader.dll`); MyGUI skips the one that does not exist.
+Untick the mod in the launcher and nothing is loaded. The loader starts KenshiMP once only, whichever
+way it is reached (it would also work from Ogre's `Plugins_x64.cfg`).
+Limit: another mod shipping its own `gui\core\core_settings.xml` would hide ours (only one of the
+two is read); RE_Kenshi is then the fallback.
 
 The loader:
 - does nothing when RE_Kenshi is installed (RE_Kenshi starts KenshiMP through `RE_Kenshi.json`);

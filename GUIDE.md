@@ -17,16 +17,14 @@ towns, and player factions can go to war with each other. The host owns the shar
 
 ## 2. Installation
 1. Copy the `dist\KenshiMP` folder into `Kenshi\mods\` (or subscribe on the Steam Workshop).
-2. **Without RE_Kenshi**: run **`Enable KenshiMP.bat`** in that folder (for the Workshop:
-   `steamapps\workshop\content\233860\<item number>`) once. It adds KenshiMP's loader to the plugins
-   the game loads (`Plugins_x64.cfg`, a backup is kept); Workshop updates then need nothing else.
-   `Disable KenshiMP.bat` removes it. Single-player saves are not affected. The loader writes
+2. In the Kenshi launcher, Mods tab: tick **KenshiMP**. That is all, nothing to run: the game
+   starts KenshiMP by itself while the mod is ticked, and no game file is changed (untick it to play
+   without). Single-player saves are not affected. Without RE_Kenshi, KenshiMP's loader writes
    `KenshiMP_loader.log` in the Kenshi folder (e.g. "not supported" on an unknown game version: the
-   game then simply starts without multiplayer). With RE_Kenshi installed this step is not needed.
-3. In the Kenshi launcher, Mods tab: tick **KenshiMP**.
-4. Settings live in `%LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg` (created on first launch from the
+   game then simply starts without multiplayer).
+3. Settings live in `%LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg` (created on first launch from the
    mod's copy; see §4). The Multiplayer window (F4) is enough in most cases.
-5. Recommended: launcher → Video settings → **Borderless** (exclusive fullscreen pauses the game
+4. Recommended: launcher → Video settings → **Borderless** (exclusive fullscreen pauses the game
    on Alt+Tab → your squad freezes for the other players).
 
 ## 3. Playing
@@ -127,7 +125,7 @@ Everything can also be set by hand in `kenshimp.cfg`:
 | "KenshiMP version mismatch" | install the same KenshiMP version everywhere |
 | A player's squad is frozen | they Alt+Tabbed out of exclusive fullscreen → borderless mode |
 | "timed out (no data for 15 s)" | connection lost; the client reconnects by itself |
-| No MULTIPLAYER button, nothing in the logs (without RE_Kenshi) | run `Enable KenshiMP.bat` again (after moving the mod, or if another tool rewrote `Plugins_x64.cfg`) |
+| No MULTIPLAYER button, nothing in the logs (without RE_Kenshi) | KenshiMP is not ticked in the launcher; or another mod replaces `gui\core\core_settings.xml` (`MyGUI.log` in the Kenshi folder must show "Loading library ...KenshiMP_Loader.dll"): untick that mod, or install RE_Kenshi |
 | `KenshiMP_loader.log`: "not supported without RE_Kenshi" | Kenshi was updated by Steam (new executable): wait for a KenshiMP update, or install RE_Kenshi |
 | Where to read the logs | `Kenshi\RE_Kenshi_log.txt` (lines starting "KenshiMP:", written with or without RE_Kenshi) and `Kenshi\KenshiMP_loader.log` |
 

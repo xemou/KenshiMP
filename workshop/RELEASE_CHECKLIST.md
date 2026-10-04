@@ -16,7 +16,7 @@ Legend: [x] done (non-code, verified in the repo) · [ ] to do · (you) = only t
 - [ ] `KenshiMP.dll` built from the tagged commit (Release, /GL /LTCG)
 - [ ] `KenshiMP.mod` present and opens in the Game Editor without "missing dependency" warnings
 - [ ] `RE_Kenshi.json` = `{ "Plugins" : [ "KenshiMP.dll" ] }`
-- [ ] `KenshiMP_Loader.dll`, `KenshiLib.dll`, `rva\RE_Kenshi\RVAs\Steam_1.0.65.br`, `Enable/Disable KenshiMP.bat` and their `.ps1` present
+- [ ] `KenshiMP_Loader.dll`, `KenshiLib.dll`, `rva\RE_Kenshi\RVAs\Steam_1.0.65.br` and `gui\core\core_settings.xml` present; after the first upload, `workshop\item_id.txt` holds the item number and the XML lists the Workshop path (check_package says so)
 - [ ] `kenshimp.cfg` has `mode=off` (never ships a host/join default)
 - [ ] `README.md`, `GUIDE.md`, `RISKS.md`, `LICENSE`, `NOTICE.md` are current
 - [ ] No leftover test settings (`debug_keys=0`, `load_sharing=0`, `ghost_no_collide=0`)
@@ -38,7 +38,7 @@ Items still marked 🧪 in `RISKS.md` / `ROADMAP.md`:
 - [ ] Trader money, client "Connecting..." message, task animations, near-NPC immunity
 - [ ] Protocol additions of the latest builds (ground items, trade, backpacks)
 - [ ] **A real session between two PCs** (Steam invitation, or a VPN): follow `workshop/TEST_AMI.md` (the main remaining unknown)
-- [ ] Clean-install test without RE_Kenshi: fresh Steam Kenshi, mod subscribed, `Enable KenshiMP.bat` from the Workshop folder, host and join
+- [ ] Clean-install test without RE_Kenshi: fresh Steam Kenshi, mod subscribed and ticked (nothing else), MULTIPLAYER button on the title screen, host and join
 - [ ] Clean-install test with RE_Kenshi + PhysX, host and join (and a mixed session: one player with, one without)
 - [ ] Workshop-folder test (local `mods\KenshiMP` removed, plugin loaded from `steamapps\workshop\content\233860\<id>\`)
 - [ ] Two saves tested: client saves go to `<name>_MP`, solo save untouched

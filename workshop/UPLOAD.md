@@ -28,13 +28,20 @@ Workshop legal agreement cannot be automated).
 4. Upload, then open the item's page in Steam: accept the **Steam Workshop legal agreement** if
    asked (otherwise the item stays hidden). Add the requirement links (RE_Kenshi on Nexus) and the
    GitHub link in the page's links if you like.
+5. **First upload only: record the item number.** It is in the item's URL
+   (`...filedetails/?id=<number>`). Write that number alone in `workshop\item_id.txt`, run
+   `package.bat` again (the game finds the loader through `gui\core\core_settings.xml`, which must
+   list the Workshop folder `../../workshop/content/233860/<number>/`; check_package stops warning),
+   copy `dist\KenshiMP` to `Kenshi\mods\KenshiMP` and update the item (see Updates). Commit
+   `item_id.txt`. Without this step, Workshop subscribers would get no multiplayer.
 
 ## Test the Workshop version (before making it public)
 1. Move your local `Kenshi\mods\KenshiMP` folder out of `mods` (otherwise two copies with the same
    name are loaded), subscribe to the item, let Steam download it.
-2. Enable KenshiMP in the launcher, start the game: `RE_Kenshi_log.txt` must show the KenshiMP
-   lines (plugin loaded from the Workshop folder), and
-   `%LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg` must exist.
+2. Enable KenshiMP in the launcher (nothing else), start the game: `MyGUI.log` must show
+   "Loading library ../../workshop/content/233860/<number>/KenshiMP_Loader.dll",
+   `KenshiMP_loader.log` "KenshiMP started", and `%LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg` must
+   exist.
 3. Open the Multiplayer window (F4) and host: everything should work as with the local copy.
 4. Then switch the visibility to **Public**.
 
