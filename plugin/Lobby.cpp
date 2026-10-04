@@ -26,13 +26,15 @@ namespace
     MyGUI::Window* g_win = NULL;
     MyGUI::EditBox *g_name = NULL, *g_faction = NULL, *g_address = NULL, *g_port = NULL, *g_password = NULL;
     MyGUI::EditBox* g_status = NULL;
-    enum Action { NONE, HOST, JOIN, LEAVE, CLOSE };
+    enum Action { NONE, HOST, JOIN, LEAVE, CLOSE, ADVANCED };
     Action g_action = NONE;                 // widgets are never destroyed from their own events
+    bool g_advanced = false;                // "Advanced settings" open: address, port, password, Join by address
     DWORD g_lastStatus = 0;
     std::string g_lastError;
 
     const int W = 480, ROW = 42, LABEL_W = 140, PAD = 18;
     const int DIP_ROWS = 7, DIP_ROW_H = 32;
+    int g_dipRows = DIP_ROWS;   // player/friend rows that fit on this screen
     std::string g_localIps;   // this PC's IPv4 addresses (LAN, VPN), for the host to share
 
     std::string localAddresses()
@@ -93,18 +95,19 @@ namespace
         }
         if (n == "KMP_Host") g_action = HOST;
         else if (n == "KMP_Join") g_action = JOIN;
+        else if (n == "KMP_Advanced") g_action = ADVANCED;
         else if (n == "KMP_Leave") g_action = LEAVE;
         else if (n == "KMP_Close") g_action = CLOSE;
     }
     void onWindowButton(MyGUI::Window*, const std::string& name) { if (name == "close") g_action = CLOSE; }
 
-    MyGUI::EditBox* field(MyGUI::Widget* parent, int row, const char* label, const std::string& value)
+    MyGUI::EditBox* field(MyGUI::Widget* parent, int y, const char* label, const std::string& value)
     {
         MyGUI::TextBox* t = parent->createWidget<MyGUI::TextBox>("Kenshi_TextboxStandardText",
-            MyGUI::IntCoord(PAD, PAD + row * ROW, LABEL_W, 32), MyGUI::Align::Default);
+            MyGUI::IntCoord(PAD, y, LABEL_W, 32), MyGUI::Align::Default);
         t->setCaption(T(label));
         MyGUI::EditBox* e = parent->createWidget<MyGUI::EditBox>("Kenshi_EditBox",
-            MyGUI::IntCoord(PAD + LABEL_W, PAD + row * ROW, W - 2 * PAD - LABEL_W - 16, 32), MyGUI::Align::Default);
+            MyGUI::IntCoord(PAD + LABEL_W, y, W - 2 * PAD - LABEL_W - 16, 32), MyGUI::Align::Default);
         e->setEditMultiLine(false);
         e->setMaxTextLength(64);
         e->setCaption(value);
@@ -151,8 +154,14 @@ namespace
             MyGUI::Gui* gui = MyGUI::Gui::getInstancePtr();
             if (!gui) return false;
             const MyGUI::IntSize& view = MyGUI::RenderManager::getInstance().getViewSize();
-            const int H = 560 + DIP_ROWS * DIP_ROW_H;   // second button row: Steam friends, bug report
-            g_win = gui->createWidget<MyGUI::Window>("Kenshi_WindowCX", MyGUI::IntCoord((view.width - W) / 2, (view.height - H) / 2, W, H),
+            // Steam first (friends, invitations); the network settings hide behind "Advanced settings".
+            const int advExtra = g_advanced ? 3 * ROW + 46 : 0;
+            const int fixedH = PAD + 2 * ROW + 6 + 2 * 40 + advExtra + 14 + 168 + 68;
+            // small screens (720 p): fewer player rows rather than a window taller than the screen
+            g_dipRows = DIP_ROWS;
+            while (g_dipRows > 2 && fixedH + g_dipRows * DIP_ROW_H > view.height) --g_dipRows;
+            const int H = fixedH + g_dipRows * DIP_ROW_H;
+            g_win = gui->createWidget<MyGUI::Window>("Kenshi_WindowCX", MyGUI::IntCoord((view.width - W) / 2, (view.height > H ? (view.height - H) / 2 : 0), W, H),
                                                      MyGUI::Align::Default, "Popup", "KenshiMP_Lobby");
             if (!g_win) return false;
             // The version in the title: players compare it before joining (it must be the same).
@@ -162,29 +171,43 @@ namespace
             MyGUI::Widget* c = g_win->getClientWidget() ? g_win->getClientWidget() : g_win;
 
             char port[16]; sprintf_s(port, "%d", g_cfg.port);
-            g_name = field(c, 0, "Name", defaultName());
-            g_faction = field(c, 1, "Faction", defaultFaction());
-            g_address = field(c, 2, "Host address", g_cfg.address);
-            g_port = field(c, 3, "Port", port);
-            g_password = field(c, 4, "Password", g_cfg.password);
-            g_password->setEditPassword(true);
+            g_name = field(c, PAD, "Name", defaultName());
+            g_faction = field(c, PAD + ROW, "Faction", defaultFaction());
 
-            int y = PAD + 5 * ROW + 6, bw = (W - 2 * PAD - 16 - 3 * 8) / 4;
-            button(c, PAD, y, bw, "Host", "KMP_Host");
-            button(c, PAD + (bw + 8), y, bw, "Join", "KMP_Join");
-            button(c, PAD + 2 * (bw + 8), y, bw, "Leave", "KMP_Leave");
-            button(c, PAD + 3 * (bw + 8), y, bw, "Close", "KMP_Close");
-            if (steam_available()) button(c, PAD, y + 40, 2 * bw + 8, "Steam friends", "KMP_SteamFriends");
-            button(c, PAD + 2 * (bw + 8), y + 40, 2 * bw + 8, "Bug report", "KMP_Report");
+            int y = PAD + 2 * ROW + 6, bw = (W - 2 * PAD - 16 - 3 * 8) / 4;
+            if (steam_available())
+            {
+                button(c, PAD, y, 2 * bw + 8, "Steam friends", "KMP_SteamFriends");
+                button(c, PAD + 2 * (bw + 8), y, bw, "Host", "KMP_Host");
+                button(c, PAD + 3 * (bw + 8), y, bw, "Leave", "KMP_Leave");
+            }
+            else
+            {
+                button(c, PAD, y, 2 * bw + 8, "Host", "KMP_Host");
+                button(c, PAD + 2 * (bw + 8), y, 2 * bw + 8, "Leave", "KMP_Leave");
+            }
             y += 40;
+            button(c, PAD, y, 2 * bw + 8, g_advanced ? "Hide advanced settings" : "Advanced settings", "KMP_Advanced");
+            button(c, PAD + 2 * (bw + 8), y, bw, "Bug report", "KMP_Report");
+            button(c, PAD + 3 * (bw + 8), y, bw, "Close", "KMP_Close");
+            y += 40;
+            if (g_advanced)
+            {
+                g_address = field(c, y + 6, "Host address", g_cfg.address);
+                g_port = field(c, y + 6 + ROW, "Port", port);
+                g_password = field(c, y + 6 + 2 * ROW, "Password", g_cfg.password);
+                g_password->setEditPassword(true);
+                button(c, PAD, y + 6 + 3 * ROW, W - 2 * PAD - 16, "Join by address", "KMP_Join");
+                y += advExtra;
+            }
 
             g_status = c->createWidget<MyGUI::EditBox>("Kenshi_WordWrap",
-                MyGUI::IntCoord(PAD, y + 50, W - 2 * PAD - 16, 160), MyGUI::Align::Default);
+                MyGUI::IntCoord(PAD, y + 14, W - 2 * PAD - 16, 160), MyGUI::Align::Default);
             g_status->setEditMultiLine(true);
             g_status->setEditWordWrap(true);
             g_status->setEditReadOnly(true);
             g_status->setCaption("");
-            g_dipPanel = c->createWidget<MyGUI::Widget>("", MyGUI::IntCoord(PAD, y + 50 + 168, W - 2 * PAD - 16, DIP_ROWS * DIP_ROW_H), MyGUI::Align::Default);
+            g_dipPanel = c->createWidget<MyGUI::Widget>("", MyGUI::IntCoord(PAD, y + 14 + 168, W - 2 * PAD - 16, g_dipRows * DIP_ROW_H), MyGUI::Align::Default);
             g_dipShown.clear();
             MyGUI::InputManager::getInstance().setKeyFocusWidget(g_name);
             g_lastStatus = 0;
@@ -218,16 +241,30 @@ namespace
     // Copies the fields into g_cfg. False (with a message) when something is unusable.
     bool readFields()
     {
-        std::string name = text(g_name), faction = text(g_faction), address = text(g_address), port = text(g_port);
-        int p = atoi(port.c_str());
+        std::string name = text(g_name), faction = text(g_faction);
         if (name.empty()) { g_lastError = T("Enter a name."); return false; }
-        if (p < 1 || p > 65535) { g_lastError = T("Port must be between 1 and 65535."); return false; }
+        if (g_port)   // advanced settings open; otherwise address, port and password stay as saved
+        {
+            int p = atoi(text(g_port).c_str());
+            if (p < 1 || p > 65535) { g_lastError = T("Port must be between 1 and 65535."); return false; }
+            std::string address = text(g_address);
+            g_cfg.address = address.empty() ? "127.0.0.1" : address;
+            g_cfg.port = p;
+            g_cfg.password = text(g_password);
+        }
         g_cfg.name = name;
         g_cfg.faction = faction.empty() ? name + "'s faction" : faction;
-        g_cfg.address = address.empty() ? "127.0.0.1" : address;
-        g_cfg.port = p;
-        g_cfg.password = text(g_password);
         return true;
+    }
+
+    // Keeps what was typed when the window is rebuilt (advanced settings opened/closed); no validation.
+    void keepFields()
+    {
+        if (g_name && !text(g_name).empty()) g_cfg.name = text(g_name);
+        if (g_faction && !text(g_faction).empty()) g_cfg.faction = text(g_faction);
+        if (g_address) { std::string a = text(g_address); if (!a.empty()) g_cfg.address = a; }
+        if (g_port) { int p = atoi(text(g_port).c_str()); if (p >= 1 && p <= 65535) g_cfg.port = p; }
+        if (g_password) g_cfg.password = text(g_password);
     }
 
     void refreshStatus()
@@ -238,15 +275,18 @@ namespace
         if (!g_session.active())
         {
             if (g_cfg.mode == "host") s = T("Not hosting yet: press Host (or load a game, kenshimp.cfg says mode=host).");
-            else if (g_cfg.mode == "join") s = T("Not connected. Press Join (retries every 10 s once in game).");
-            else s = T("Not connected. Host a game, or enter the host's address and press Join.");
+            else if (g_cfg.mode == "join") s = T("Not connected. Press Join by address in Advanced settings (retries every 10 s once in game).");
+            else s = T("Not connected. Host a game, or accept a friend's Steam invitation.");
         }
         else if (g_session.isHost())
         {
             s = TF("Hosting on port %d.", g_cfg.port);
-            if (g_localIps.empty()) g_localIps = localAddresses();
-            if (!g_localIps.empty()) s += TF(" This PC: %s.", g_localIps.c_str());
-            s += std::string("\n") + T("Friends on your network/VPN (Radmin, ZeroTier, Tailscale) join with one of these addresses; over the Internet use your public IP and forward the TCP port on your router.");
+            if (g_advanced || !steam_available())   // direct connections: only with the advanced settings (or without Steam)
+            {
+                if (g_localIps.empty()) g_localIps = localAddresses();
+                if (!g_localIps.empty()) s += TF(" This PC: %s.", g_localIps.c_str());
+                s += std::string("\n") + T("Friends on your network/VPN (Radmin, ZeroTier, Tailscale) join with one of these addresses; over the Internet use your public IP and forward the TCP port on your router.");
+            }
             if (!ou || !ou->player || ou->player->playerCharacters.size() == 0) s += std::string("\n") + T("Start or load a game: players join your world.");
         }
         else if (!ready())
@@ -257,18 +297,19 @@ namespace
         {
             s = TF("Connected to %s:%d - ping %d ms.", g_cfg.address.c_str(), g_cfg.port, g_session.pingMs());
         }
+        if (steam_available())
+        {
+            s += "\n" + TF("Steam: %s. ", steam_personaName().c_str());
+            s += g_session.active() && g_session.isHost() ? T("Steam friends can join you: STEAM FRIENDS > INVITE, or \"Join game\" on your profile.")
+                                                         : T("Accept a friend's Steam invitation to join them (no address needed).");
+            if (!g_session.active()) s += " " + std::string(T("Without Steam: Advanced settings (address, port)."));
+        }
         std::vector<PlayerInfo> ps = g_session.players();
         if (!ps.empty())
         {
             s += std::string("\n") + T("Players:");
             for (size_t i = 0; i < ps.size(); ++i)
                 s += "\n - " + ps[i].name + " (" + ps[i].faction + ")" + (ps[i].id == g_session.localId() ? T("  <- you") : "");
-        }
-        if (steam_available())
-        {
-            s += "\n" + TF("Steam: %s. ", steam_personaName().c_str());
-            s += g_session.active() && g_session.isHost() ? T("Steam friends can join you: STEAM FRIENDS > INVITE, or \"Join game\" on your profile.")
-                                                         : T("Accept a friend's Steam invitation to join them (no address needed).");
         }
         if (!g_lastError.empty()) s += "\n" + g_lastError;
         s += "\n" + TF("%s opens/closes this window. Enter = chat.", g_cfg.lobbyKeyName.c_str());
@@ -288,7 +329,7 @@ namespace
         std::vector<SteamFriend> all, rows;
         steam_friends(all);
         for (int pass = 0; pass < 2; ++pass)
-            for (size_t i = 0; i < all.size() && rows.size() < (size_t)DIP_ROWS; ++i)
+            for (size_t i = 0; i < all.size() && rows.size() < (size_t)g_dipRows; ++i)
                 if (all[i].online && all[i].inKenshi == (pass == 0)) rows.push_back(all[i]);
         std::string sig = "friends:";
         for (size_t i = 0; i < rows.size(); ++i) { char b[48]; sprintf_s(b, "%llu%d;", rows[i].id, (int)rows[i].inKenshi); sig += b; }
@@ -332,7 +373,7 @@ namespace
         std::vector<PlayerInfo> ps = g_session.players();
         std::string sig;
         std::vector<std::pair<PlayerInfo, float> > rows;
-        for (size_t i = 0; i < ps.size() && rows.size() < (size_t)DIP_ROWS; ++i)
+        for (size_t i = 0; i < ps.size() && rows.size() < (size_t)g_dipRows; ++i)
         {
             if (ps[i].id == g_session.localId()) continue;
             float rel = diplomacy_relation(ps[i].id);
@@ -607,6 +648,12 @@ void lobby_tick()
         g_lastError.clear();
         mp_leave();
         break;
+    case ADVANCED:
+        keepFields();
+        g_advanced = !g_advanced;
+        destroy();
+        create();
+        return;
     case CLOSE:
         destroy();
         return;

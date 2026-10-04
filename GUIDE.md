@@ -33,19 +33,18 @@ towns, and player factions can go to war with each other. The host owns the shar
 **Easiest: the Multiplayer window.** A **MULTIPLAYER** button sits under the title screen menu and
 under the pause menu (Esc), or press **F4** at any time. The mod speaks the game's language:
 1. Fill in **Name** (your name) and **Faction** (the name of your faction as seen by others).
-2. **Host**: click **Host**. The window shows this PC's IP addresses (LAN / VPN) to give to your
-   friends, then start or load a game.
-3. **Client**: enter the **Host address** (the host's IP), the **Port** and the **Password** if any,
-   click **Join**, then start a game (a fresh game dedicated to multiplayer is recommended).
+2. **Through Steam (recommended):** no IP address, no port to open, no VPN. The host presses
+   **Host**, then **STEAM FRIENDS** and **INVITE** next to a friend (or the friend uses **Join game**
+   on the host's Steam profile). The friend accepts the invitation and the game connects through
+   Steam's network (direct when possible, Steam's relays otherwise). Then start or load a game (a
+   fresh game dedicated to multiplayer is recommended for the friend).
+3. **By IP address (GOG copies, LAN, VPN):** click **ADVANCED SETTINGS**. The host clicks **Host**
+   (the window then shows this PC's IP addresses, LAN / VPN); the friend enters the **Host address**,
+   the **Port** and the **Password** if any, and clicks **JOIN BY ADDRESS**.
 4. The window shows the status (connected, ping, player list) or the reason for a refusal:
    missing / extra mods / different order, wrong password, host unreachable…
 5. **Leave** ends the session (no automatic reconnect). Your choices are saved in `kenshimp.cfg`:
    next launch, the connection is made again automatically.
-**Through Steam (easiest over the Internet, Steam copies of Kenshi):** no IP address, no port to
-open, no VPN. The host opens the Multiplayer window, presses **Host**, then **STEAM FRIENDS** and
-**INVITE** next to a friend (or the friend uses **Join game** on the host's Steam profile). The
-friend accepts the invitation and the game connects through Steam's network (direct when possible,
-Steam's relays otherwise). GOG copies keep the IP connection below.
 
 6. **Diplomacy and trading**: one line per player with **WAR / PEACE / ALLY / TRADE**.
    To trade, bring one of your characters next to one of theirs and click **TRADE**; the other

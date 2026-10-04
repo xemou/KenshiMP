@@ -38,21 +38,19 @@ monde partagé (PNJ, horloge, pause).
 l'écran titre et sous le menu pause (Échap), ou appuyez sur **F4** à tout moment. Le mod parle la
 langue du jeu :
 1. Remplissez **Nom** (votre nom) et **Faction** (le nom de votre faction vu par les autres).
-2. **Hôte** : cliquez **Héberger**. La fenêtre affiche les adresses IP de ce PC (réseau local / VPN)
-   à donner à vos amis ; lancez ensuite ou chargez une partie.
-3. **Client** : entrez l'**adresse de l'hôte** (son IP), le **port** et le **mot de passe** s'il y en
-   a un, cliquez **Rejoindre**, puis lancez une partie (une partie neuve dédiée au multijoueur est
-   conseillée).
+2. **Par Steam (conseillé)** : ni adresse IP, ni port à ouvrir, ni VPN. L'hôte appuie sur
+   **Héberger**, puis **AMIS STEAM** et **INVITER** à côté d'un ami (ou l'ami utilise **Rejoindre la
+   partie** sur le profil Steam de l'hôte). L'ami accepte l'invitation et le jeu se connecte par le
+   réseau de Steam (en direct si possible, sinon par les relais de Steam). Lancez ensuite ou chargez
+   une partie (une partie neuve dédiée au multijoueur est conseillée pour l'ami).
+3. **Par adresse IP (copies GOG, réseau local, VPN)** : cliquez **PARAMÈTRES SUPPLÉMENTAIRES**.
+   L'hôte clique **Héberger** (la fenêtre affiche alors les adresses IP de ce PC, réseau local / VPN) ;
+   l'ami entre l'**adresse de l'hôte**, le **port** et le **mot de passe** s'il y en a un, puis
+   clique **REJOINDRE PAR ADRESSE**.
 4. La fenêtre affiche l'état (connecté, ping, liste des joueurs) ou la raison d'un refus : mods
    manquants / en trop / dans un autre ordre, mauvais mot de passe, hôte injoignable…
 5. **Quitter** termine la session (pas de reconnexion automatique). Vos choix sont enregistrés dans
    `kenshimp.cfg` : au prochain lancement, la connexion se refait toute seule.
-
-**Par Steam (le plus simple par Internet, copies Steam de Kenshi) :** ni adresse IP, ni port à
-ouvrir, ni VPN. L'hôte ouvre la fenêtre Multijoueur, appuie sur **Héberger**, puis **AMIS STEAM** et
-**INVITER** à côté d'un ami (ou l'ami utilise **Rejoindre la partie** sur le profil Steam de l'hôte).
-L'ami accepte l'invitation et le jeu se connecte par le réseau de Steam (en direct si possible,
-sinon par les relais de Steam). Les copies GOG gardent la connexion par IP ci-dessous.
 
 6. **Diplomatie et échanges** : une ligne par joueur avec **GUERRE / PAIX / ALLIÉ / ÉCHANGE**.
    Pour échanger, amenez un de vos persos à côté d'un des siens et cliquez **ÉCHANGE** ; l'autre

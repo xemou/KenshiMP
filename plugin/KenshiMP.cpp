@@ -692,7 +692,11 @@ namespace
         if (step == 8 && s >= 66) { step = 81; log("autotest: factions screen opened -> %d", (int)lobby_debugOpenFactions(other, true)); }
         if (step == 81 && s >= 69) { step = 82; log("autotest: ALLY pressed in the factions screen -> %d", (int)lobby_pressTitleButton("KMP_Dip_1_a")); }
         if (step == 82 && s >= 72) { step = 83; log("autotest: relation with %s now %.0f", playerName(other).c_str(), diplomacy_relation(other)); lobby_debugOpenFactions(other, false); }
-        if (step == 83 && s >= 95) { step = -1; chars_logHitStats(); log("autotest: done"); }
+        if (step == 83 && s >= 74) { step = 84; lobby_toggle(); log("autotest: lobby window opened -> %d", (int)lobby_isOpen()); }
+        if (step == 84 && s >= 82) { step = 85; log("autotest: Advanced settings pressed -> %d", (int)lobby_pressTitleButton("KMP_Advanced")); }
+        if (step == 85 && s >= 102) { step = 86; log("autotest: Advanced settings pressed again -> %d", (int)lobby_pressTitleButton("KMP_Advanced")); }
+        if (step == 86 && s >= 107) { step = 87; lobby_toggle(); log("autotest: lobby window closing"); }
+        if (step == 87 && s >= 110) { step = -1; chars_logHitStats(); log("autotest: lobby open after close -> %d; done", (int)lobby_isOpen()); }
     }
 
     bool gameFocused()
