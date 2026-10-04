@@ -796,6 +796,7 @@ namespace
             log("autotest: town door %s", builds_debugTownDoor().c_str());
             log("autotest: unique %s", towns_debugUnique().c_str());
             log("autotest: town override %s", towns_debugOverride().c_str());
+            log("autotest: far town %s", towns_debugFarTown().c_str());
             log("autotest: faction %s", bounties_debugFaction().c_str());
         }
 

@@ -396,6 +396,13 @@ int main(int argc, char** argv)
         char farEnv[32]; size_t fl = 0;
         if (getenv_s(&fl, farEnv, sizeof(farEnv), "KMP_TEST_FAR") == 0 && fl > 1) sscanf_s(farEnv, "%d,%d", &farFrom, &farTo);
     }
+    // KMP_TEST_FARPOS=x,y,z: during the KMP_TEST_FAR window, stand there (a far town) instead.
+    bool farPos = false; float farX = 0, farY = 0, farZ = 0;
+    {
+        char fp[96]; size_t fl = 0;
+        if (getenv_s(&fl, fp, sizeof(fp), "KMP_TEST_FARPOS") == 0 && fl > 1 && sscanf_s(fp, "%f,%f,%f", &farX, &farY, &farZ) == 3)
+        { farPos = true; printf("[bot] far position: (%.0f, %.0f, %.0f)\n", farX, farY, farZ); }
+    }
     if (argc > 4) { if (argv[4][0] == 'd') { delayMs = (DWORD)atoi(argv[4] + 1); offset = 0.f; } else offset = (float)atof(argv[4]); }
     struct Delayed { DWORD due; Bytes body; };
     std::vector<Delayed> delayed;
@@ -627,7 +634,9 @@ int main(int argc, char** argv)
                         }
                     }
                     st.netId = mine(st.netId); { float o = offset; DWORD sinceC = connectedAt ? (GetTickCount() - connectedAt) / 1000 : 0;
-                      if (farFrom >= 0 && connectedAt && (int)sinceC >= farFrom && (int)sinceC < farTo) o = 4000.f;
+                      bool farNow = farFrom >= 0 && connectedAt && (int)sinceC >= farFrom && (int)sinceC < farTo;
+                      if (farNow && farPos) { st.x = st.tx = farX + 3.f * i; st.y = st.ty = farY; st.z = st.tz = farZ; st.vx = st.vy = st.vz = 0; o = 0; }   // in that far town
+                      else if (farNow) o = 4000.f;
                       st.x += o; st.tx += o; }
                     if (i == 0) { copyX = st.x; copyY = st.y; copyZ = st.z; copyKnown = true; }
                     if (koMode && connectedAt && GetTickCount() - connectedAt > koAfter * 1000)

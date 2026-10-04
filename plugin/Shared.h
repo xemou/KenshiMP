@@ -260,6 +260,7 @@ void towns_onMessage(const mp::NetEvent& e);
 void towns_resendAll();
 void towns_onWorldReload();
 std::string towns_debugUnique();      // test: a unique NPC's id
+std::string towns_debugFarTown();     // test: "name;x,y,z" of a town 8000-20000 units away
 std::string towns_debugOverride();    // test: "townSid;overrideSid" for a far town that has another version
 std::string builds_debugTownDoor();   // test: "sid;x;y;z;door;doorCount" of a nearby town building
 

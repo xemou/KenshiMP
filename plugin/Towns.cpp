@@ -40,6 +40,8 @@
 
 #include <map>
 #include <vector>
+#include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 using namespace mp;
@@ -500,6 +502,28 @@ std::string towns_debugUnique()
         if (other.empty()) other = d->stringID;
     }
     return other;
+}
+
+// Test (autotest): "name;x,y,z" of a town 8000-20000 units from us (the one nearest 12000), where
+// the test bot stands as a far client (traders, residents: does it get a living town?).
+std::string towns_debugFarTown()
+{
+    if (!ou || !ou->player || ou->player->playerCharacters.size() == 0) return "";
+    Ogre::Vector3 me = ou->player->playerCharacters[0]->getPosition();
+    std::vector<Town*> ts;
+    if (!safeTowns(&ts)) return "";
+    Town* best = NULL; float bestScore = 1e30f;
+    for (size_t i = 0; i < ts.size(); ++i)
+    {
+        float d = ts[i]->getPosition().distance(me);
+        if (d < 8000.f || d > 20000.f) continue;
+        float score = fabsf(d - 12000.f);
+        if (score < bestScore) { bestScore = score; best = ts[i]; }
+    }
+    if (!best) return "";
+    Ogre::Vector3 p = best->getPosition();
+    char buf[96]; sprintf_s(buf, ";%.0f,%.0f,%.0f", p.x, p.y, p.z);
+    return best->getName() + buf;
 }
 
 // Test (autotest): "townSid;overrideSid" for the town farthest from us that has an "override
