@@ -5,6 +5,7 @@
 // Only fields of the engine's SaveManager are read (no extra engine function, so nothing to add to
 // the address tables); the folder is looked up in both places Kenshi keeps saves.
 #include <kenshi/SaveManager.h>
+#include <kenshi/Character.h> // pulls Ogre in before windows.h (Shared.h) defines min/max
 
 #include "Shared.h"
 
