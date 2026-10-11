@@ -1,24 +1,12 @@
-v19 - fixes from your feedback (protocol 19: everybody must update, the host refuses older versions)
+v19 - bug fixes (protocol 19: everybody must update)
 
-Thank you for the reviews. This update works on what you reported:
+Thank you for the reviews. Fixed the bugs you reported:
 
-- Coming back to the host's world after being far away: your own NPCs now stay until the host's have
-  arrived (up to 45 s), instead of leaving an empty town for a while. The host loads the zones around a
-  returning player straight away.
-- Going back to your own world: the NPCs removed meanwhile come back (same character, position, looks and
-  gear), on top of what the game creates by itself. Their inventory and money are not restored.
-- Looks: other characters' looks are now copied exactly. Before, anything the original did not define kept a
-  random value, so people looked different (and differently after each reload).
-- NPC items and money for non-host players: if the host's description of an NPC never reached you, your
-  game now asks again (NPCs within 60 units, up to 4 times).
-- If the host's zone around a player never loads, that player simulates their own surroundings after 25 s
-  instead of standing in an empty town.
-- Test builds log a census of the surroundings (NPCs, host NPCs, zone, furnished buildings).
-- New COMPATIBILITY.md: what is known about other mods (same mod list, same order, for everybody).
+- Empty town after coming back to the host's world
+- NPCs without items or money for players other than the host
+- Characters looking different, and differently after each reload
 
-Still to check in real games (tell me!): NPC items and money for non-host players, looks with race mods
-(VRoid Race Face+ and others: if a mod does not work, send me its name and the /report folder).
-Known limits: no host migration, speed locked at x1, carrying or caging another player's character is blocked.
+New: COMPATIBILITY.md on GitHub, what is known about other mods. If a mod does not work, tell me its name.
 
 v18 - first public beta (protocol 18)
 
