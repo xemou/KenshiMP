@@ -864,6 +864,16 @@ int main()
         NetEvent none;
         CHECK(!waitEvent(host, NetEvent::EV_MESSAGE, none, 300, MSG_ITEM_TAKE));
     }
+    // Inventory re-request: a client asks the host for an NPC's inventory -> the host only.
+    {
+        ByteWriter w; w.u8(HOST_ID); w.u8(CONTAINER_CHARACTER); w.u32(NPC_ID_FLAG | 7);
+        b.send(MSG_INVENTORY_REQUEST, w.data);
+        NetEvent got, none;
+        CHECK(waitEvent(host, NetEvent::EV_MESSAGE, got, 3000, MSG_INVENTORY_REQUEST));
+        ByteReader r(got.body);
+        CHECK(got.sender == 2 && r.u8() == HOST_ID && r.u8() == CONTAINER_CHARACTER && r.u32() == (NPC_ID_FLAG | 7) && r.ok());
+        CHECK(!waitEvent(a, NetEvent::EV_MESSAGE, none, 300, MSG_INVENTORY_REQUEST));
+    }
     // Ground item: announced to everybody; a pickup goes to the owner only.
     {
         InvItem it; it.item = "bread"; it.quantity = 3;

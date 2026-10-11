@@ -709,6 +709,64 @@ namespace
 
 void items_sendUndo(uint8_t to, uint8_t action, uint8_t kind, uint32_t id, const InvItem& d) { sendUndo(to, action, kind, id, d); }
 
+// ---------------------------------------------------------------------- NPC inventories: re-requests
+// The host describes an NPC's inventory (and its squad money) once when its ghost spawns, then only
+// when it changes. If that message was lost (ghost not there in time: PENDING_TTL_MS, item that
+// failed to apply...), the NPC stays empty for the client forever. So the client asks again for
+// every NPC next to its characters whose inventory it never applied.
+namespace
+{
+    const DWORD NPC_AUDIT_MS = 1000, NPC_REQUEST_GAP_MS = 5000, NPC_REQUEST_ANSWER_GAP_MS = 1000;
+    const float NPC_AUDIT_RADIUS = 60.f;
+    const int NPC_REQUEST_TRIES = 4;
+    struct Request { DWORD at; int tries; Request() : at(0), tries(0) {} };
+    std::map<uint32_t, Request> g_requested;        // client: NPC net id -> last request
+    std::map<uint64_t, DWORD> g_answered;           // host: (client, NPC) -> last answer
+    DWORD g_lastAudit = 0;
+
+    void requestNpcInventories(DWORD now)
+    {
+        if (now - g_lastAudit < NPC_AUDIT_MS) return;
+        g_lastAudit = now;
+        if (!ready() || !g_session.active() || g_session.isHost() || npcs_ownWorld()) return;
+        std::vector<Ogre::Vector3> centres;
+        cs_localPositions(centres);
+        if (centres.empty()) return;
+        std::vector<uint32_t> around;
+        chars_npcGhostsNear(centres, NPC_AUDIT_RADIUS, around);
+        for (size_t i = 0; i < around.size(); ++i)
+        {
+            uint32_t id = around[i];
+            uint64_t k = key(CONTAINER_CHARACTER, id);
+            if (g_lastMirror.count(k) || g_pending.count(k)) continue;   // received (or about to be applied)
+            Request& rq = g_requested[id];
+            if (rq.tries >= NPC_REQUEST_TRIES || (rq.tries && now - rq.at < NPC_REQUEST_GAP_MS)) continue;
+            rq.at = now; ++rq.tries;
+            ByteWriter w; w.u8(netIdOwner(id)); w.u8(CONTAINER_CHARACTER); w.u32(id);
+            g_session.send(MSG_INVENTORY_REQUEST, w.data);
+            log("inventory of NPC %08x never received: asked the host again (%d/%d)", id, rq.tries, NPC_REQUEST_TRIES);
+        }
+    }
+
+    // Host: answer with the NPC's current inventory, its money and its backpack.
+    void answerInventoryRequest(const NetEvent& e)
+    {
+        ByteReader r(e.body);
+        uint8_t target = r.u8(), kind = r.u8();
+        uint32_t id = r.u32();
+        if (!r.ok() || target != g_session.localId() || kind != CONTAINER_CHARACTER || !isNpcNetId(id) || netIdOwner(id) != target) return;
+        DWORD now = GetTickCount();
+        DWORD& last = g_answered[((uint64_t)e.sender << 32) | id];
+        if (last && now - last < NPC_REQUEST_ANSWER_GAP_MS) return;
+        Character* c = chars_byNetId(id);
+        if (!c) return;
+        last = now;
+        g_session.sendTo(e.sender, MSG_INVENTORY, items_inventoryMsg(CONTAINER_CHARACTER, id, c->inventory, items_moneyOf(c)));
+        Bytes bp = items_backpackMsg(id, c);
+        if (!bp.empty()) g_session.sendTo(e.sender, MSG_INVENTORY, bp);
+    }
+}
+
 // ---------------------------------------------------------------------- town containers
 namespace
 {
@@ -857,6 +915,7 @@ void items_worldForget(uint8_t player)
 void items_onMessage(const NetEvent& e)
 {
     if (e.msgType == MSG_WORLD_CONTAINER) { onBoxEvent(e); return; }
+    if (e.msgType == MSG_INVENTORY_REQUEST) { if (g_session.isHost()) answerInventoryRequest(e); return; }
     ByteReader r(e.body);
     if (e.msgType == MSG_INVENTORY)
     {
@@ -923,6 +982,7 @@ void items_tick(DWORD now)
     }
     static DWORD lastDetect = 0;
     if (now - lastDetect >= 100) { lastDetect = now; detectTransfers(); }
+    requestNpcInventories(now);
     if (sharedWorldClient() && now - g_lastBoxScan >= BOX_SCAN_MS) { g_lastBoxScan = now; scanBoxes(); }
     if (g_session.isHost() && now - g_lastBoxPush >= BOX_PUSH_MS)
     {
@@ -979,6 +1039,7 @@ void items_onDespawn(uint32_t id)
         uint64_t k = key(kinds[n], id);
         g_appliedHash.erase(k); g_created.erase(k); g_moneyBase.erase(k); g_open.erase(k); g_baseline.erase(k);
     }
+    g_requested.erase(id);   // a new body of this NPC may ask again
 }
 
 void items_onWorldReload()
@@ -992,6 +1053,8 @@ void items_onWorldReload()
     g_open.clear();
     g_pending.clear();
     g_appliedHash.clear();
+    g_requested.clear();
+    g_answered.clear();
 }
 
 namespace

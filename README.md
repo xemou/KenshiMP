@@ -80,6 +80,7 @@ Windows SDK 7.1 ISO into `deps\vc2010`, KenshiLib headers from `deps\KenshiLib\I
 
 ## Documentation
 - [GUIDE.md](GUIDE.md) - install, usage, options, troubleshooting, limits
+- [COMPATIBILITY.md](COMPATIBILITY.md) - other mods: what works, what is untested
 - [RISKS.md](RISKS.md) - multiplayer risk register
 - [ROADMAP.md](ROADMAP.md) - roadmap
 

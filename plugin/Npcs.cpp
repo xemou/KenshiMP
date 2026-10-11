@@ -189,6 +189,62 @@ namespace
         __except (EXCEPTION_EXECUTE_HANDLER) { ++g_zoneFailures; return false; }
     }
 
+    // Empty-town safeguard. A client in the shared world sees only what the host simulates. If the host's
+    // zone around that client never loads (engine refuses, far corner of the map...), the client would
+    // stand in an empty town: no residents, no prisoners, nobody to talk to. After ZONE_GRACE_MS without
+    // a loaded zone the client is moved to its own world instead (its game simulates its surroundings,
+    // exactly as when it is far from the host). Released once the zone loads or the client moves away.
+    const DWORD ZONE_GRACE_MS = 25000;
+    const float ZONE_RELEASE_DIST = 2500.f;
+    std::map<uint8_t, DWORD> g_zoneBadSince;                       // host: client -> first check without a loaded zone
+    std::map<uint8_t, Ogre::Vector3> g_forcedApart;                // host: client -> where it was when moved to its own world
+
+    bool safeZoneLoaded(const Ogre::Vector3* p)
+    {
+        __try { return ou->zoneMgr && ou->zoneMgr->isZoneLoadedT(*p); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+
+    void watchRemoteZones()
+    {
+        if (!g_cfg.loadSharing) return;
+        DWORD now = GetTickCount();
+        std::vector<PlayerInfo> players = g_session.players();
+        for (size_t p = 0; p < players.size(); ++p)
+        {
+            uint8_t id = players[p].id;
+            if (id == HOST_ID) continue;
+            std::vector<Ogre::Vector3> centres;
+            cs_ghostPositions(id, centres);
+            if (centres.empty()) continue;
+            bool loaded = false;
+            for (size_t i = 0; i < centres.size() && !loaded; ++i) loaded = safeZoneLoaded(&centres[i]);
+            // Host NPCs shown to that client prove the world works there, whatever the zone query says.
+            for (std::map<Character*, Npc>::iterator n = g_npcs.begin(); n != g_npcs.end() && !loaded; ++n)
+                loaded = n->second.clients.count(id) != 0;
+            std::map<uint8_t, Ogre::Vector3>::iterator forced = g_forcedApart.find(id);
+            if (forced != g_forcedApart.end())
+            {
+                if (loaded || forced->second.distance(centres[0]) > ZONE_RELEASE_DIST)
+                {
+                    log("zone watch: %s released from its own world (%s)", playerName(id).c_str(), loaded ? "the host's zone is loaded there" : "it moved away");
+                    g_forcedApart.erase(forced);
+                    g_zoneBadSince.erase(id);
+                }
+                continue;
+            }
+            std::map<uint8_t, int>::iterator m = g_clientMode.find(id);
+            if (m == g_clientMode.end() || m->second != MODE_SHARED || loaded) { g_zoneBadSince.erase(id); continue; }
+            std::map<uint8_t, DWORD>::iterator bad = g_zoneBadSince.find(id);
+            if (bad == g_zoneBadSince.end()) { g_zoneBadSince[id] = now; continue; }
+            if (now - bad->second < ZONE_GRACE_MS) continue;
+            g_forcedApart[id] = centres[0];
+            g_zoneBadSince.erase(id);
+            log("zone watch: the host's zone around %s (%.0f, %.0f, %.0f) is not loaded after %lu s: it simulates its own surroundings instead",
+                playerName(id).c_str(), centres[0].x, centres[0].y, centres[0].z, (unsigned long)(ZONE_GRACE_MS / 1000));
+        }
+    }
+
     void keepRemoteZonesLoaded()
     {
         if (g_zoneFailures > 5) return;   // engine refuses: stop trying, log once
@@ -218,12 +274,14 @@ namespace
             for (size_t i = 0; i < mine.size(); ++i)
                 if (mine[i].second) { float n = nearest(mine[i].second->getPosition(), centres); if (n < d) d = n; }
             mode = shareMode(prev == g_clientMode.end() ? MODE_UNKNOWN : prev->second, d);
+            if (g_forcedApart.count(client)) mode = MODE_APART;   // zone watch: the host's zone there never loaded
             if (prev == g_clientMode.end() || prev->second != mode)
                 log("load sharing: player %d is %s (%.0f units from us)", (int)client, mode == MODE_SHARED ? "in our world" : "on its own", d);
         }
         if (prev == g_clientMode.end() || prev->second != mode)
         {
             g_clientMode[client] = mode;
+            if (mode == MODE_SHARED) g_lastZoneKeep = 0;   // client (back) in our world: load the zones around it now, not in up to 3 s
             ByteWriter w; w.u8(client); w.u8((uint8_t)mode);
             g_session.sendTo(client, MSG_ZONE_MODE, w.data);
         }
@@ -388,6 +446,73 @@ namespace
         g_looksCursor = it == g_npcs.end() ? NULL : it->first;
     }
 
+    // Client: has the host sent any NPC next to our characters yet?
+    const DWORD PURGE_GRACE_MS = 45000;
+    DWORD g_sharedSince = 0;                 // client: when the shared world began (GetTickCount)
+    bool g_waitLogged = false, g_graceDone = false;
+    bool hostPeopleArrived()
+    {
+        std::vector<Ogre::Vector3> centres;
+        cs_localPositions(centres);
+        if (centres.empty()) return true;    // nothing to wait for
+        std::vector<uint32_t> ids;
+        chars_npcGhostsNear(centres, INTEREST_RADIUS, ids);   // what the host sends us (its interest radius)
+        return !ids.empty();
+    }
+
+    // Client: the local people removed while the host's world is shown are remembered, and brought back
+    // when we are on our own again (far from the host), on top of what the zones create by themselves.
+    const size_t STASH_MAX = 3000;
+    const DWORD STASH_MAX_AGE_MS = 10 * 60 * 1000;
+    const float RESTORE_RADIUS = 1500.f;
+    const float STASH_DUPLICATE_DIST = 30.f;   // a repopulated copy of someone already remembered
+    std::vector<StashedNpc> g_stash;
+    std::vector<StashedNpc> g_restoreQueue;
+    int g_restored = 0, g_restoreSkipped = 0, g_restoreFailed = 0;
+
+    void rememberNpc(const StashedNpc& s)
+    {
+        if (g_stash.size() >= STASH_MAX) return;
+        for (size_t i = 0; i < g_stash.size(); ++i)
+            if (g_stash[i].tmpl == s.tmpl && g_stash[i].faction == s.faction && g_stash[i].pos.distance(s.pos) < STASH_DUPLICATE_DIST) return;
+        g_stash.push_back(s);
+    }
+
+    // We are on our own again: queue the remembered people who were close enough, then drop the memory.
+    void queueRestore()
+    {
+        g_restoreQueue.clear();
+        g_restored = g_restoreSkipped = g_restoreFailed = 0;
+        std::vector<Ogre::Vector3> centres;
+        cs_localPositions(centres);
+        DWORD now = GetTickCount();
+        size_t tooOld = 0, tooFar = 0;   // ('far' / 'near' are windows.h macros)
+        for (size_t i = 0; i < g_stash.size(); ++i)
+        {
+            if (now - g_stash[i].at > STASH_MAX_AGE_MS) { ++tooOld; continue; }
+            if (nearest(g_stash[i].pos, centres) > RESTORE_RADIUS) { ++tooFar; continue; }
+            g_restoreQueue.push_back(g_stash[i]);
+        }
+        log("load sharing: %d remembered NPC(s): %d to bring back, %d too far from us, %d too old", (int)g_stash.size(), (int)g_restoreQueue.size(), (int)tooFar, (int)tooOld);
+        g_stash.clear();
+    }
+
+    // A few per call, so bringing back a whole town does not make the game hitch.
+    void restoreStep()
+    {
+        for (int k = 0; k < 12 && !g_restoreQueue.empty(); ++k)
+        {
+            StashedNpc s = g_restoreQueue.back();
+            g_restoreQueue.pop_back();
+            Ogre::Vector3 p = s.pos;
+            if (!safeZoneLoaded(&p)) { ++g_restoreSkipped; }   // creating people in an unloaded zone only makes churn
+            else if (cs_restoreNpc(s)) ++g_restored;
+            else ++g_restoreFailed;
+            if (g_restoreQueue.empty())
+                log("load sharing: %d NPC(s) brought back, %d skipped (zone not loaded), %d failed", g_restored, g_restoreSkipped, g_restoreFailed);
+        }
+    }
+
     // Client: remove the local population around our characters (or everywhere, once).
     void clientCleanup(bool everywhere)
     {
@@ -403,8 +528,13 @@ namespace
             // Keep what we took over (recruited/carried/looted NPCs) and our captives.
             Character* lc = *it;
             if (chars_isClaimed(lc) || lc->isBeingCarried() || lc->isSlave() == IS_SLAVE) continue;
-            if (everywhere && n < 5) log("world sync: removing local '%s'", (*it)->getName().c_str());
-            if (cs_destroy(*it)) ++n;
+            if (everywhere && n < (g_cfg.autotest ? 80 : 5)) log("world sync: removing local '%s'", (*it)->getName().c_str());
+            StashedNpc keep; bool described = cs_stashNpc(lc, keep);   // before it is gone
+            if (cs_destroy(*it))
+            {
+                ++n;
+                if (described) rememberNpc(keep);
+            }
         }
         // Aggregate: towns keep trying to repopulate, one line per second would flood the log.
         static int pending = 0;
@@ -418,6 +548,27 @@ namespace
             pending = 0;
         }
     }
+}
+
+// Test runs: what stands around our first character, in one line (see the autotest census in KenshiMP.cpp).
+std::string npcs_debugCensus()
+{
+    std::vector<Ogre::Vector3> centres;
+    cs_localPositions(centres);
+    if (centres.empty()) return "";
+    std::vector<Ogre::Vector3> mine(1, centres[0]);
+    const float radii[3] = { 100.f, 400.f, 1500.f };
+    int local[3] = { 0, 0, 0 }, ghosts[3] = { 0, 0, 0 };
+    for (int i = 0; i < 3; ++i)
+    {
+        std::set<Character*> locals; collectAround(mine, radii[i], locals); local[i] = (int)locals.size();
+        std::vector<uint32_t> ids; chars_npcGhostsNear(mine, radii[i], ids); ghosts[i] = (int)ids.size();
+    }
+    const char* mode = g_session.isHost() ? "host" : (!g_session.active() ? "not connected" : (g_zoneMode == MODE_SHARED ? "shared world" : (g_zoneMode == MODE_APART ? "own world" : "mode unknown")));
+    char buf[400];
+    sprintf_s(buf, "census at (%.0f, %.0f, %.0f) [%s]: zone loaded=%d; local NPCs %d/%d/%d, host NPC ghosts with a body %d/%d/%d (within 100/400/1500), %d ghost(s) alive in total",
+              mine[0].x, mine[0].y, mine[0].z, mode, safeZoneLoaded(&mine[0]) ? 1 : 0, local[0], local[1], local[2], ghosts[0], ghosts[1], ghosts[2], chars_ghostTotal());
+    return buf;
 }
 
 uint32_t npcs_netIdOf(Character* c)
@@ -443,12 +594,38 @@ void npcs_tick(DWORD now)
         if (now - g_lastScan >= SCAN_PERIOD_MS) { g_lastScan = now; hostScan(); }
         if (now - g_lastState >= STATE_PERIOD_MS) { g_lastState = now; hostStates(); }
         if (now - g_lastLooks >= LOOKS_PERIOD_MS / LOOKS_SLICES) { g_lastLooks = now; hostLooks(); }
-        if (now - g_lastZoneKeep >= ZONE_KEEPALIVE_MS) { g_lastZoneKeep = now; keepRemoteZonesLoaded(); }
+        if (now - g_lastZoneKeep >= ZONE_KEEPALIVE_MS) { g_lastZoneKeep = now; { keepRemoteZonesLoaded(); watchRemoteZones(); } }
         return;
     }
+    if (g_zoneMode == MODE_APART)
+    {
+        static DWORD lastRestore = 0;
+        if (!g_restoreQueue.empty() && now - lastRestore >= 100) { lastRestore = now; restoreStep(); }
+    }
     if (g_zoneMode != MODE_SHARED) return;   // our own world (far from the host), or not told yet
+    // Coming back from our own world (or joining): our local people are removed only once the host's
+    // have arrived around us. The host needs a few seconds to load the zone again; removing ours at
+    // once left the town empty ("my friend came back and the town was empty").
+    if (now - g_lastCleanup < CLEANUP_PERIOD_MS) return;
+    g_lastCleanup = now;
+    bool arrived = hostPeopleArrived();
+    if (arrived) g_graceDone = true;   // the host's people have been here once: no more waiting until the next change of world
+    if (!g_graceDone && now - g_sharedSince < PURGE_GRACE_MS)
+    {
+        if (!g_waitLogged)
+        {
+            g_waitLogged = true;
+            std::vector<Ogre::Vector3> centres; cs_localPositions(centres);
+            std::set<Character*> locals; collectAround(centres, CLEANUP_RADIUS, locals);
+            log("load sharing: keeping the %d local NPC(s) around us until the host's arrive (at most %lu s)", (int)locals.size(), (unsigned long)(PURGE_GRACE_MS / 1000));
+        }
+        return;
+    }
+    if (g_waitLogged) log("load sharing: %s after %lu ms: removing the local NPCs now", arrived ? "the host's NPCs arrived" : "grace period over", (unsigned long)(now - g_sharedSince));
+    g_waitLogged = false;
+    g_graceDone = true;
     if (!g_purgedAll) { g_purgedAll = true; clientCleanup(true); }
-    if (now - g_lastCleanup >= CLEANUP_PERIOD_MS) { g_lastCleanup = now; clientCleanup(false); }
+    clientCleanup(false);
 }
 
 // A client recruited one of our NPCs: it now lives on the client; remove ours everywhere.
@@ -494,6 +671,11 @@ void npcs_reset()
     g_looksCursor = NULL;
     g_purgedAll = false;
     g_clientMode.clear();
+    g_zoneBadSince.clear();
+    g_forcedApart.clear();
+    g_stash.clear(); g_restoreQueue.clear();
+    g_sharedSince = 0;
+    g_waitLogged = false; g_graceDone = false;
     g_zoneMode = MODE_UNKNOWN;
 }
 
@@ -513,7 +695,8 @@ void npcs_onZoneMode(const NetEvent& e)
     if (mode == g_zoneMode) return;
     bool entering = mode == MODE_SHARED;
     g_zoneMode = mode;
-    if (entering) g_purgedAll = false;   // the host's people replace ours around us (next tick)
+    if (entering) { g_purgedAll = false; g_sharedSince = GetTickCount(); g_waitLogged = false; g_graceDone = false; g_restoreQueue.clear(); }   // the host's people replace ours around us (once they arrive)
+    else queueRestore();   // on our own again: the people removed meanwhile come back
     log("load sharing: %s", entering ? "the host simulates the world around us" : "we simulate our own surroundings (far from the host)");
     if (g_cfg.debugKeys) chat_notice(entering ? "World shared with the host" : "Own world (far from the host)");
 }
@@ -521,6 +704,8 @@ void npcs_onZoneMode(const NetEvent& e)
 void npcs_onPlayerLeft(uint8_t id)
 {
     g_clientMode.erase(id);
+    g_zoneBadSince.erase(id);
+    g_forcedApart.erase(id);
     for (std::map<Character*, Npc>::iterator it = g_npcs.begin(); it != g_npcs.end(); ++it)
         it->second.clients.erase(id);
 }

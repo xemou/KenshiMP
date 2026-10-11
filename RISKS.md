@@ -84,7 +84,7 @@ Legend: ✅ handled (and how it is verified) · 🧪 coded and tested offline, *
 | 62 | Flooded log | ✅ | Messages aggregated and limited; detailed diagnostics only with `debug_keys=1`. |
 | 63 | Exclusive fullscreen (Alt+Tab pauses the game) | ✅ | Doc: borderless mode. |
 | 64 | Kenshi / RE_Kenshi update | 🟡 | KenshiLib adapts; clock located dynamically; check imports (script) and logs after an update. |
-| 65 | Other mods hooking the same functions | 🟡 | KenshiLib handles multiple hooks; incompatibilities possible, to test case by case. |
+| 65 | Other mods hooking the same functions | 🟡 | KenshiLib handles multiple hooks; incompatibilities possible, to test case by case. What is known: `COMPATIBILITY.md` (9 popular mods played with the bot: no problem; race mods and DLL plugins not tested). |
 | 66 | Antivirus blocking the DLL | 🟡 | Doc: exception for the Kenshi folder. |
 | 67 | Chat | ✅ | Enter opens the box (decided at key press: the Enter that confirms a game window, e.g. save, does not open it), Enter sends, Esc cancels; Kenshi's keys inactive while typing. Seen in game. |
 | 69 | Complicated connection (IP, port, config file) | ✅ | Multiplayer window (title screen button / F4): Host/Join/Leave, local IPs shown, readable refusal reasons (missing / extra / reordered mods), config saved (seen in game: host, client, refusal, input). |

@@ -121,6 +121,7 @@ bool chars_isClaimed(Character* c);
 Character* chars_nextGhost(Character* after);
 std::string chars_debugShoot(Character* me);   // test: our character fires at a ghost   // cycles through the ghosts (debug camera)
 void chars_localCharacters(std::vector<std::pair<uint32_t, Character*> >& out);   // our replicated squad
+void chars_npcGhostsNear(const std::vector<Ogre::Vector3>& centres, float radius, std::vector<uint32_t>& out);   // host NPC ghosts within radius of a centre
 void chars_playerGhosts(std::vector<std::pair<uint32_t, Character*> >& out);      // other players' characters here
 bool chars_playerPosition(uint8_t owner, Ogre::Vector3& out);   // last known position of one of its characters
 std::string chars_regroupTo(uint8_t owner);   // move our selected characters next to that player's (text to show)
@@ -262,6 +263,8 @@ void towns_onWorldReload();
 std::string towns_debugUnique();      // test: a unique NPC's id
 std::string towns_debugFarTown();     // test: "name;x,y,z" of a town 8000-20000 units away
 std::string towns_debugOverride();    // test: "townSid;overrideSid" for a far town that has another version
+std::vector<std::string> builds_debugCensus(float radius);   // test: furnished / empty structures around our first character
+std::string npcs_debugCensus();                               // test: local NPCs, host NPC ghosts, zone state around our first character
 std::string builds_debugTownDoor();   // test: "sid;x;y;z;door;doorCount" of a nearby town building
 
 // Bounties.cpp: crimes seen in the host's world reach the real character

@@ -16,7 +16,7 @@
 
 namespace mp {
 
-const uint32_t PROTOCOL_VERSION = 18;
+const uint32_t PROTOCOL_VERSION = 19;
 
 // World NPCs replicated by the host use the upper half of the host's local id space.
 const uint32_t NPC_ID_FLAG = 0x800000;
@@ -73,7 +73,8 @@ enum MsgType
     MSG_WORLD_CONTAINER,  // c->h u8 HOST_ID, u8 open (1 opened, 0 closed), u32 containerNetId, str buildingSid, f32 x, y, z :
                           //      the client opened a town container (chest, shop storage...): the host sends its content
                           //      (MSG_INVENTORY, kind CONTAINER_WORLD) while it stays open, transfers go to the host
-    MSG_REGROUP           // u8 targetPlayer : the sender's squad was moved next to that player's characters (F4 / "/goto")
+    MSG_REGROUP,          // u8 targetPlayer : the sender's squad was moved next to that player's characters (F4 / "/goto")
+    MSG_INVENTORY_REQUEST // c->owner u8 targetPlayer, u8 kind, u32 containerNetId : "your MSG_INVENTORY of this NPC never reached me, send it again"
 };
 
 inline bool isRelayed(uint8_t t) { return t >= MSG_ENTITY_STATE; }

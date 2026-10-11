@@ -453,6 +453,7 @@ namespace
             applyFactionTable(e.sender, e.body);
             break;
         case MSG_INVENTORY:
+        case MSG_INVENTORY_REQUEST:
         case MSG_ITEM_TAKE:
         case MSG_ITEM_GIVE:
         case MSG_ITEM_UNDO:
@@ -798,6 +799,21 @@ namespace
             log("autotest: town override %s", towns_debugOverride().c_str());
             log("autotest: far town %s", towns_debugFarTown().c_str());
             log("autotest: faction %s", bounties_debugFaction().c_str());
+        }
+
+        // Test runs: a census of the surroundings every 10 s (NPCs, ghosts, zone, furnished buildings),
+        // connected or not, so a run shows what the world looked like before, during and after joining.
+        if ((g_cfg.autotest || g_cfg.debugKeys) && worldLoaded())
+        {
+            static DWORD lastCensus = 0;
+            if (GetTickCount() - lastCensus >= 10000)
+            {
+                lastCensus = GetTickCount();
+                std::string c = npcs_debugCensus();
+                if (!c.empty()) log("%s", c.c_str());
+                std::vector<std::string> b = builds_debugCensus(250.f);
+                for (size_t i = 0; i < b.size(); ++i) log("%s", b[i].c_str());
+            }
         }
 
         // Events are drained even when the session just died, so the disconnect is handled.

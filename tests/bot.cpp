@@ -11,6 +11,7 @@
 //   40 gives it back, 45 drops an item on the ground next to its copy, 50 declares war, 75 makes peace. Its mirrored characters lose their left arm
 //   (limb sync) and carry the host's inventory (inventory mirror). Weather from the host is logged.
 #include "../core/Session.h"
+#include "../core/LoadSharing.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <windows.h>
@@ -50,6 +51,12 @@ struct Rec { DWORD ms; uint8_t type; Bytes body; };
 static bool nearMode = false, haveClient = false, haveShift = false;
 static uint32_t clientChar = 0;
 static float clientPos[3], shift[3];
+// KMP_TEST_SHARE=1 (host replay): the bot behaves like a host standing at hostPos. The recorded NPCs are
+// moved there, the client is told "shared world" / "on its own" by its distance to hostPos (the host
+// plugin's own thresholds, core/LoadSharing.h), the NPCs are despawned when it leaves and sent again,
+// after KMP_TEST_LOAD_MS (the host loading the zone), when it comes back.
+static bool shareOn = false;
+static float hostPos[3];
 static Bytes moveNear(uint8_t type, const Bytes& body)
 {
     ByteReader r(body);
@@ -57,7 +64,12 @@ static Bytes moveNear(uint8_t type, const Bytes& body)
     {
         EntitySpawn sp; sp.read(r);
         if (!r.ok()) return body;
-        if (!haveShift) { shift[0] = clientPos[0] + 20 - sp.x; shift[1] = clientPos[1] - sp.y; shift[2] = clientPos[2] + 20 - sp.z; haveShift = true; }
+        if (!haveShift)
+        {
+            if (shareOn) { shift[0] = hostPos[0] - sp.x; shift[1] = hostPos[1] - sp.y; shift[2] = hostPos[2] - sp.z; }
+            else { shift[0] = clientPos[0] + 20 - sp.x; shift[1] = clientPos[1] - sp.y; shift[2] = clientPos[2] + 20 - sp.z; }
+            haveShift = true;
+        }
         sp.x += shift[0]; sp.y += shift[1]; sp.z += shift[2];
         ByteWriter w; sp.write(w); return w.data;
     }
@@ -137,6 +149,8 @@ static bool showcase()
 static int hostReplay(const char* file, int port, int seconds, const char* mods)
 {
     { char nm[8]; size_t nl = 0; nearMode = getenv_s(&nl, nm, sizeof(nm), "KMP_TEST_NEAR") == 0 && nl > 1; }
+    { char nm[8]; size_t nl = 0; shareOn = getenv_s(&nl, nm, sizeof(nm), "KMP_TEST_SHARE") == 0 && nl > 1; }
+    if (shareOn) nearMode = true;   // the NPCs are moved (to hostPos) once we know where the client is
     std::vector<Rec> recs;
     FILE* f = NULL;
     if (fopen_s(&f, file, "rb") != 0 || !f) { printf("cannot open %s\n", file); return 1; }
@@ -165,7 +179,13 @@ static int hostReplay(const char* file, int port, int seconds, const char* mods)
     s.setModList(mods, true);
     { char pw[128]; size_t pl = 0; if (getenv_s(&pl, pw, sizeof(pw), "KMP_BOT_PASSWORD") == 0 && pl > 1) { s.setPassword(pw); printf("[host] session password set\n"); } }
     if (!s.host(port, "ReplayHost", "Host World", err)) { printf("host failed: %s\n", err.c_str()); return 1; }
-    DWORD t0 = GetTickCount(), start = 0;
+    DWORD t0 = GetTickCount(), start = 0, rstart = 0, replayAt = 0;   // rstart: when the NPC replay (re)started, 0 = not replaying
+    DWORD loadMs = 8000; { std::string lv; if (envStr("KMP_TEST_LOAD_MS", lv)) loadMs = (DWORD)atoi(lv.c_str()); }
+    int shareMode_ = SHARE_UNKNOWN;
+    // Share test: the recording starts when its first NPC spawns (it was recorded ~38 s into a session).
+    DWORD baseMs = 0;
+    if (shareOn) for (size_t i = 0; i < recs.size(); ++i) if (recs[i].type == MSG_ENTITY_SPAWN) { baseMs = recs[i].ms; break; }
+    std::set<uint32_t> live;   // NPC ids the client currently has
     size_t next = 0;
     int damages = 0;
     // KMP_TEST_ZONE=a,b: tell the client it is on its own at a s, back in our world at b s (load sharing).
@@ -179,11 +199,29 @@ static int hostReplay(const char* file, int port, int seconds, const char* mods)
         NetEvent e;
         while (s.pollEvent(e))
         {
-            if (e.kind == NetEvent::EV_PLAYER_JOINED) { printf("[host] %s joined, replaying\n", e.player.name.c_str()); start = GetTickCount(); next = 0; joined = e.player.id; zoneStep = 0; }
-            else if (e.kind == NetEvent::EV_MESSAGE && e.msgType == MSG_ENTITY_STATE && !haveClient)
+            if (e.kind == NetEvent::EV_PLAYER_JOINED) { printf("[host] %s joined, replaying\n", e.player.name.c_str()); start = GetTickCount(); next = 0; joined = e.player.id; zoneStep = 0; if (!shareOn) rstart = start; }
+            else if (e.kind == NetEvent::EV_MESSAGE && e.msgType == MSG_ENTITY_STATE)
             {
                 ByteReader r(e.body); r.u32(); uint16_t n = r.u16();
-                if (n) { EntityState st; st.read(r); if (r.ok()) { clientChar = st.netId; clientPos[0] = st.x; clientPos[1] = st.y; clientPos[2] = st.z; haveClient = true; printf("[host] client character at (%.0f, %.0f, %.0f)\n", st.x, st.y, st.z); } }
+                for (uint16_t i = 0; i < n && r.ok(); ++i)
+                {
+                    EntityState st; st.read(r);
+                    if (!r.ok()) break;
+                    if (!haveClient)
+                    {
+                        clientChar = st.netId; clientPos[0] = st.x; clientPos[1] = st.y; clientPos[2] = st.z; haveClient = true;
+                        printf("[host] client character at (%.0f, %.0f, %.0f)\n", st.x, st.y, st.z);
+                        if (shareOn)
+                        {
+                            // Where the "host" stands: KMP_TEST_HOSTPOS=x,y,z, else KMP_TEST_HOSTDIST (default 3500) east of the client.
+                            std::string hp; float dist = 3500.f; { std::string dv; if (envStr("KMP_TEST_HOSTDIST", dv)) dist = (float)atof(dv.c_str()); }
+                            if (envStr("KMP_TEST_HOSTPOS", hp) && sscanf_s(hp.c_str(), "%f,%f,%f", &hostPos[0], &hostPos[1], &hostPos[2]) == 3) {}
+                            else { hostPos[0] = st.x + dist; hostPos[1] = st.y; hostPos[2] = st.z; }
+                            printf("[host] host stands at (%.0f, %.0f, %.0f): shared world within %.0f units, own world beyond %.0f\n", hostPos[0], hostPos[1], hostPos[2], SHARE_ENTER, SHARE_LEAVE);
+                        }
+                    }
+                    if (st.netId == clientChar) { clientPos[0] = st.x; clientPos[1] = st.y; clientPos[2] = st.z; }
+                }
             }
             else if (e.kind == NetEvent::EV_MESSAGE && e.msgType == MSG_BOUNTIES)
             {
@@ -248,6 +286,45 @@ static int hostReplay(const char* file, int port, int seconds, const char* mods)
                 printf("[host] zone mode for player %d: %s\n", (int)joined, mode ? "shared" : "on its own");
             }
         }
+        // Load sharing by distance, like the host plugin (Npcs.cpp updateClientMode + hostScan).
+        if (shareOn && start && haveClient)
+        {
+            float dx = clientPos[0] - hostPos[0], dy = clientPos[1] - hostPos[1], dz = clientPos[2] - hostPos[2];
+            float d = sqrtf(dx * dx + dy * dy + dz * dz);
+            static DWORD lastPrint = 0;
+            if (GetTickCount() - lastPrint > 5000) { lastPrint = GetTickCount(); printf("[host] client is %.0f units from us (%s)\n", d, shareMode_ == SHARE_SHARED ? "shared world" : "own world"); }
+            int m = shareMode(shareMode_, d);
+            if (m != shareMode_)
+            {
+                shareMode_ = m;
+                ByteWriter w; w.u8(joined); w.u8((uint8_t)m);
+                s.sendTo(joined, MSG_ZONE_MODE, w.data);
+                printf("[host] %.0f units: zone mode for player %d: %s\n", d, (int)joined, m == SHARE_SHARED ? "shared" : "on its own");
+                if (m == SHARE_APART)
+                {
+                    for (std::set<uint32_t>::iterator it = live.begin(); it != live.end(); ++it) { ByteWriter z; z.u32(*it); s.sendTo(joined, MSG_ENTITY_DESPAWN, z.data); }
+                    printf("[host] %d NPC(s) despawned for the client\n", (int)live.size());
+                    live.clear(); rstart = 0; replayAt = 0;
+                }
+                else { replayAt = GetTickCount() + loadMs; if (!replayAt) replayAt = 1; printf("[host] loading the zone around the client: NPCs in %lu ms\n", (unsigned long)loadMs); }
+            }
+            // KMP_TEST_HOSTPATH=dist@sec,...: the host "walks": from sec after the join it stands dist units east of where the client started.
+            static std::vector<std::pair<int, float> > path; static size_t pathStep = 0; static bool pathRead = false;
+            if (!pathRead)
+            {
+                pathRead = true; std::string pv;
+                if (envStr("KMP_TEST_HOSTPATH", pv)) { size_t a = 0; while (a < pv.size()) { size_t b = pv.find(',', a); std::string it = pv.substr(a, b == std::string::npos ? std::string::npos : b - a); float dd = 0; int ss = 0; if (sscanf_s(it.c_str(), "%f@%d", &dd, &ss) == 2) path.push_back(std::make_pair(ss, dd)); if (b == std::string::npos) break; a = b + 1; } }
+            }
+            static float startX = 0; static bool haveStart = false;
+            if (!haveStart) { haveStart = true; startX = clientPos[0]; }
+            if (pathStep < path.size() && (int)((GetTickCount() - start) / 1000) >= path[pathStep].first)
+            {
+                hostPos[0] = startX + path[pathStep].second; haveShift = false;   // the NPCs are placed around the new spot at the next replay
+                printf("[host] host walks to %.0f units from the client's start\n", path[pathStep].second);
+                ++pathStep;
+            }
+            if (replayAt && (int)(GetTickCount() - replayAt) >= 0) { replayAt = 0; rstart = GetTickCount(); next = 0; printf("[host] zone loaded: sending our NPCs\n"); }
+        }
         // Bounty test (game = client): our NPCs "saw" its character commit an assault at 40 s.
         static bool crimeSent = false;
         if (start && !crimeSent && clientChar && GetTickCount() - start >= 40000)
@@ -280,9 +357,15 @@ static int hostReplay(const char* file, int port, int seconds, const char* mods)
                 printf("[host] town building %s sent with its %d door(s) broken\n", ref.sid.c_str(), doors);
             }
         }
-        if (start)
-            while (next < recs.size() && GetTickCount() - start >= recs[next].ms)
+        if (rstart)
+            while (next < recs.size() && GetTickCount() - rstart >= (recs[next].ms > baseMs ? recs[next].ms - baseMs : 0))
             {
+                if (shareOn)
+                {
+                    uint32_t id = firstId(recs[next].type, recs[next].body);
+                    if (recs[next].type == MSG_ENTITY_SPAWN && id) live.insert(id);
+                    else if (recs[next].type == MSG_ENTITY_DESPAWN) live.erase(id);
+                }
                 if (nearMode && haveClient) { s.send(recs[next].type, moveNear(recs[next].type, recs[next].body)); ++next; continue; }
                 if (nearMode && !haveClient) break;   // wait until we know where the client is
                 s.send(recs[next].type, recs[next].body);

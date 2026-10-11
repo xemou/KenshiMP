@@ -938,7 +938,62 @@ namespace kmp { namespace {
     }
 } }
 
+namespace
+{
+    bool censusIsFurniture(Building* b) { __try { return b->isFurniture(); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; } }
+    bool censusIsDoor(Building* b) { __try { return b->isDoor(); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; } }
+    Building* censusParent(Building* b) { __try { return b->furnitureParentBuilding(); } __except (EXCEPTION_EXECUTE_HANDLER) { return NULL; } }
+    bool censusList(lektor<RootObject*>& out, const Ogre::Vector3& p, float r)
+    {
+        __try { ou->getObjectsWithinSphere(out, p, r, BUILDING, 400, NULL); return true; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+}
+
 namespace kmp {
+// Test runs (autotest / debug_keys): are the buildings around our first character furnished? Counts the
+// structures (houses, shops...), their furniture and doors, and names the structures with no furniture
+// at all (a town stripped of its interiors would show up here). One line per entry.
+std::vector<std::string> builds_debugCensus(float radius)
+{
+    std::vector<std::string> out;
+    if (!ou || !ou->player || ou->player->playerCharacters.size() == 0) return out;
+    Ogre::Vector3 me = ou->player->playerCharacters[0]->getPosition();
+    lektor<RootObject*> list;
+    if (!censusList(list, me, radius)) { out.push_back("building census: query failed"); return out; }
+    std::map<Building*, int> furnitureOf;      // structure -> furniture pieces
+    std::vector<Building*> structures;
+    int furniture = 0, doors = 0, world = 0, parentless = 0;
+    for (uint32_t i = 0; i < list.size(); ++i)
+    {
+        Building* b = static_cast<Building*>(list[i]);
+        if (!b) continue;
+        if (censusIsFurniture(b))
+        {
+            ++furniture;
+            Building* p = censusParent(b);
+            if (p) ++furnitureOf[p]; else ++parentless;
+        }
+        else if (censusIsDoor(b)) ++doors;
+        else { structures.push_back(b); if (isWorldBuilding(b)) ++world; }
+    }
+    int furnished = 0; std::string empty; int emptyShown = 0, emptyCount = 0;
+    for (size_t i = 0; i < structures.size(); ++i)
+    {
+        std::map<Building*, int>::iterator f = furnitureOf.find(structures[i]);
+        if (f != furnitureOf.end() && f->second > 0) { ++furnished; continue; }
+        ++emptyCount;
+        if (emptyShown < 6 && structures[i]->data) { ++emptyShown; empty += (emptyShown > 1 ? ", " : "") + structures[i]->data->stringID; }
+    }
+    char buf[400];
+    sprintf_s(buf, "building census r=%.0f: %d object(s)%s: %d structure(s) (%d town), %d furniture, %d door(s); %d structure(s) furnished, %d without furniture",
+              radius, (int)list.size(), list.size() >= 400 ? " (query cap reached)" : "", (int)structures.size(), world, furniture, doors, furnished, emptyCount);
+    out.push_back(buf);
+    if (parentless) { sprintf_s(buf, "building census: %d furniture piece(s) with no parent structure", parentless); out.push_back(buf); }
+    if (!empty.empty()) out.push_back("building census: structures without furniture: " + empty);
+    return out;
+}
+
 // Test (autotest): nearest town building with doors around our first character, as
 // "sid;x;y;z;door;doorCount" (what the test bot needs to hit it), "" if none.
 std::string builds_debugTownDoor()

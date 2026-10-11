@@ -413,6 +413,21 @@ namespace
     // Same CRT (msvcr100) and Ogre allocator as the game, so writing into its maps is safe.
     void applyAppearance(GameData* d, const AppearanceBlob& b)
     {
+        // REPLACE, not merge: a ghost is spawned from a character template and gets its own random
+        // looks (face, hair, build...). Keys the source character does not have would keep that random
+        // value, so the ghost looked different from the real one (and differently after each reload).
+        if (!b.s.empty() || !b.i.empty() || !b.f.empty() || !b.b.empty() || !b.lists.empty())
+        {
+            d->sdata.clear(); d->idata.clear(); d->fdata.clear(); d->bdata.clear();
+            std::vector<std::string> stale;
+            for (auto it = d->objectReferences.begin(); it != d->objectReferences.end(); ++it)
+            {
+                bool kept = false;
+                for (size_t k = 0; k < b.lists.size() && !kept; ++k) kept = b.lists[k].first == it->first;
+                if (!kept) stale.push_back(it->first);
+            }
+            for (size_t k = 0; k < stale.size(); ++k) d->clearList(stale[k]);
+        }
         for (size_t k = 0; k < b.s.size(); ++k) d->sdata[b.s[k].first] = b.s[k].second;
         for (size_t k = 0; k < b.i.size(); ++k) d->idata[b.i[k].first] = b.i[k].second;
         for (size_t k = 0; k < b.f.size(); ++k) d->fdata[b.f[k].first] = b.f[k].second;
@@ -1567,6 +1582,19 @@ void chars_localCharacters(std::vector<std::pair<uint32_t, Character*> >& out)
     }
 }
 
+void chars_npcGhostsNear(const std::vector<Ogre::Vector3>& centres, float radius, std::vector<uint32_t>& out)
+{
+    for (std::map<uint32_t, Ghost>::iterator it = g_ghosts.begin(); it != g_ghosts.end(); ++it)
+    {
+        if (!isNpcNetId(it->first)) continue;
+        Character* c = it->second.h.getCharacter();
+        if (!c) continue;
+        Ogre::Vector3 p = c->getPosition();
+        for (size_t i = 0; i < centres.size(); ++i)
+            if (centres[i].distance(p) <= radius) { out.push_back(it->first); break; }
+    }
+}
+
 void chars_playerGhosts(std::vector<std::pair<uint32_t, Character*> >& out)
 {
     for (std::map<uint32_t, Ghost>::iterator it = g_ghosts.begin(); it != g_ghosts.end(); ++it)
@@ -1851,6 +1879,59 @@ void cs_localPositions(std::vector<Ogre::Vector3>& out)
 }
 
 bool cs_destroy(Character* c) { ++g_itemsMute; ++g_itemsEpoch; bool r = safeDestroy(c); --g_itemsMute; return r; }
+
+bool cs_stashNpc(Character* c, StashedNpc& out)
+{
+    if (!c || !c->data) return false;
+    Faction* f = c->getFaction();
+    if (!f || !f->getData()) return false;
+    out.tmpl = c->data->stringID;
+    out.faction = f->getData()->stringID;
+    out.name = c->getName();
+    out.pos = c->getPosition();
+    out.look = captureAppearance(c->getAppearanceData());
+    out.hasGear = c->inventory != NULL;
+    if (out.hasGear) out.gear = captureEquipment(c);
+    out.at = GetTickCount();
+    return !out.tmpl.empty() && !out.faction.empty();
+}
+
+namespace
+{
+    std::map<Faction*, Platoon*> g_restoreSquads;   // one squad per faction for the NPCs we bring back
+}
+
+bool cs_restoreNpc(const StashedNpc& s)
+{
+    Faction* f = ou->factionMgr->getFactionByStringID(s.faction);
+    GameData* tmpl = dataOf(s.tmpl);
+    if (!f || !tmpl || f->isThePlayer() || f == ou->player->getFaction()) return false;
+    ActivePlatoon* squad = NULL;
+    std::map<Faction*, Platoon*>::iterator it = g_restoreSquads.find(f);
+    if (it != g_restoreSquads.end()) squad = safeActive(it->second);
+    if (!squad)
+    {
+        GameData* squadTemplate = ou->player->currentPlatoon ? ou->player->currentPlatoon->data : NULL;
+        Platoon* p = safeNewPlatoon(f, squadTemplate, &s.pos);
+        if (!p) return false;
+        g_restoreSquads[f] = p;
+        squad = safeActive(p);
+    }
+    if (!squad) return false;
+    Character* c = static_cast<Character*>(safeSpawn(f, &s.pos, tmpl, squad));
+    if (!c) return false;
+    if (!s.name.empty()) c->setName(s.name);
+    if (!s.look.s.empty() || !s.look.i.empty() || !s.look.f.empty() || !s.look.b.empty() || !s.look.lists.empty())
+        if (GameData* d = c->getAppearanceData()) { applyAppearance(d, s.look); safeRefreshAppearance(c); }
+    if (s.hasGear)
+    {
+        Ghost dressing;   // only its list of given items is used
+        applyEquipment(dressing, c, s.gear);
+        static int logged = 0;
+        if (logged < 5) { ++logged; log("restored NPC '%s': %d worn/held item(s) put back", s.name.c_str(), (int)s.gear.size()); }
+    }
+    return true;
+}
 
 namespace {
     // Copies a squad's members; guarded because squads can be half-torn-down while unloading.
