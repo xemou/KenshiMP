@@ -16,7 +16,7 @@
 
 namespace mp {
 
-const uint32_t PROTOCOL_VERSION = 20;
+const uint32_t PROTOCOL_VERSION = 21;
 
 // World NPCs replicated by the host use the upper half of the host's local id space.
 const uint32_t NPC_ID_FLAG = 0x800000;
@@ -74,7 +74,8 @@ enum MsgType
                           //      the client opened a town container (chest, shop storage...): the host sends its content
                           //      (MSG_INVENTORY, kind CONTAINER_WORLD) while it stays open, transfers go to the host
     MSG_REGROUP,          // u8 targetPlayer : the sender's squad was moved next to that player's characters (F4 / "/goto")
-    MSG_INVENTORY_REQUEST // c->owner u8 targetPlayer, u8 kind, u32 containerNetId : "your MSG_INVENTORY of this NPC never reached me, send it again"
+    MSG_INVENTORY_REQUEST, // c->owner u8 targetPlayer, u8 kind, u32 containerNetId : "your MSG_INVENTORY of this NPC never reached me, send it again"
+    MSG_HEAL              // u8 targetPlayer, HealMsg : first aid / doctoring given to a copy of the target's character (the owner applies it to the real one)
 };
 
 inline bool isRelayed(uint8_t t) { return t >= MSG_ENTITY_STATE; }
@@ -423,6 +424,36 @@ struct DamageMsg
         cut = r.f32(); blunt = r.f32(); pierce = r.f32();
     }
     void sanitize() { cut = clampF(cut, 0, MAX_HIT); blunt = clampF(blunt, 0, MAX_HIT); pierce = clampF(pierce, 0, MAX_HIT); }
+};
+
+
+// Treatment given to a copy of somebody else's character: what the care changed (per body part, and blood),
+// applied by the owner to the real character (the copy itself is overwritten by the owner's state).
+const float MAX_HEAL = 500.f;
+struct HealMsg
+{
+    uint32_t victimNetId;
+    std::vector<std::pair<uint8_t, float> > parts;   // body part index, flesh gained
+    float blood;                                     // blood gained
+
+    HealMsg() : victimNetId(0), blood(0) {}
+    void write(ByteWriter& w) const
+    {
+        w.u32(victimNetId); w.u8((uint8_t)(parts.size() > 32 ? 32 : parts.size()));
+        for (size_t i = 0; i < parts.size() && i < 32; ++i) { w.u8(parts[i].first); w.f32(parts[i].second); }
+        w.f32(blood);
+    }
+    void read(ByteReader& r)
+    {
+        victimNetId = r.u32(); uint8_t n = r.u8(); parts.clear();
+        for (int i = 0; i < n && i < 32 && r.ok(); ++i) { uint8_t k = r.u8(); float v = r.f32(); parts.push_back(std::make_pair(k, v)); }
+        blood = r.f32();
+    }
+    void sanitize()
+    {
+        for (size_t i = 0; i < parts.size(); ++i) parts[i].second = clampF(parts[i].second, 0, MAX_HEAL);
+        blood = clampF(blood, 0, MAX_HEAL * 10);
+    }
 };
 
 } // namespace mp

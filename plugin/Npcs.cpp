@@ -481,9 +481,13 @@ namespace
                 continue;
             }
 
+            // The client sees our characters too (their ghosts): what surrounds them must be there as well,
+            // otherwise the enemies a friend fights 700 units away are only on the host's side.
+            std::vector<Ogre::Vector3> watch = centres;
+            cs_localPositions(watch);
             std::set<Character*> wanted;
             g_diagQueries = g_diagFound = 0;
-            collectAround(centres, INTEREST_RADIUS, wanted);
+            collectAround(watch, INTEREST_RADIUS, wanted);
             static DWORD lastDiag = 0;
             if (GetTickCount() - lastDiag > 10000)
             {
@@ -513,7 +517,7 @@ namespace
                     Lock l;
                     it = g_npcs.insert(std::make_pair(*w, n)).first;
                 }
-                float d = nearest((*w)->getPosition(), centres);
+                float d = nearest((*w)->getPosition(), watch);
                 if (d < it->second.nearestPlayer) it->second.nearestPlayer = d;
                 if (!it->second.clients.count(client))
                 {
@@ -526,7 +530,7 @@ namespace
             for (std::map<Character*, Npc>::iterator it = g_npcs.begin(); it != g_npcs.end(); ++it)
             {
                 if (!it->second.clients.count(client) || wanted.count(it->first)) continue;
-                if (nearest(it->first->getPosition(), centres) > DROP_RADIUS)
+                if (nearest(it->first->getPosition(), watch) > DROP_RADIUS)
                 {
                     sendDespawnTo(client, it->second.id);
                     it->second.clients.erase(client);

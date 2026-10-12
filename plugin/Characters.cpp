@@ -84,6 +84,8 @@ namespace
         __try { c->getMovement()->_setPositionAndTeleport(*p, floor); return true; }
         __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
     }
+    bool safeDead(Character* c) { __try { return c->isDead(); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; } }
+    bool safeUnconscious(Character* c) { __try { return c->medical.isUnconcious(); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; } }
     // Render layer: moves only what is drawn (model/scene node), not the simulated body.
     bool safeVisual(Character* c, const Ogre::Vector3* p, const Ogre::Quaternion* q)
     {
@@ -719,6 +721,77 @@ namespace
         if (!isNpcNetId(d.victimNetId) && sender != g_session.localId()) diplomacy_assaulted(sender);
     }
 
+    // ------------------------------------------------------------------ treatment of copies
+    // First aid / doctoring given to the copy of somebody else's character changes nothing for good (the owner's
+    // state overwrites the copy): what the care did is measured on the copy, sent to the owner, and applied there.
+    struct HealAcc { float d[32]; float blood; bool any; HealAcc() : blood(0), any(false) { for (int i = 0; i < 32; ++i) d[i] = 0; } };
+    std::map<uint32_t, HealAcc> g_heal;
+    DWORD g_lastHealSend = 0;
+    long g_healsSent = 0, g_healsApplied = 0;
+
+    bool safeApplyHeal(Character* c, const uint8_t* idx, const float* d, int n, float blood)
+    {
+        __try
+        {
+            MedicalSystem& m = c->medical;
+            for (int i = 0; i < n; ++i)
+            {
+                if (idx[i] >= m.anatomy.size()) continue;
+                MedicalSystem::HealthPartStatus* p = m.anatomy[idx[i]];
+                float cap = p->maxHealth(), nf = p->flesh + d[i];
+                if (nf > cap) nf = cap > p->flesh ? cap : p->flesh;
+                if (nf > p->flesh) { p->flesh = nf; p->updateDerivedHealths(); }
+            }
+            if (blood > 0)
+            {
+                float mb = m.getMaxBlood(), nb = m.blood + blood;
+                if (nb > mb) nb = mb > m.blood ? mb : m.blood;
+                m.blood = nb;
+            }
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+
+    void applyIncomingHeal(const HealMsg& h)
+    {
+        Character* c = localByNetId(h.victimNetId);   // our squad member or (host) a world NPC
+        if (!c || h.parts.empty() && h.blood <= 0) return;
+        uint8_t idx[32]; float d[32]; int n = 0;
+        for (size_t i = 0; i < h.parts.size() && n < 32; ++i) { idx[n] = h.parts[i].first; d[n] = h.parts[i].second; ++n; }
+        float before = 0, after = 0;
+        if (g_cfg.debugKeys && n > 0 && idx[0] < c->medical.anatomy.size()) before = c->medical.anatomy[idx[0]]->flesh;
+        bool ok = safeApplyHeal(c, idx, d, n, h.blood);
+        if (ok) ++g_healsApplied;
+        if (g_cfg.debugKeys)
+        {
+            if (n > 0 && idx[0] < c->medical.anatomy.size()) after = c->medical.anatomy[idx[0]]->flesh;
+            log("treatment received for %08x: %d part(s), blood +%.1f, first part flesh %.2f -> %.2f (%s)", h.victimNetId, n, h.blood, before, after, ok ? "applied" : "failed");
+        }
+    }
+
+    // Every 200 ms: what the care changed since, one message per treated copy.
+    void flushHeals(DWORD now)
+    {
+        if (g_heal.empty() || now - g_lastHealSend < 200) return;
+        g_lastHealSend = now;
+        for (std::map<uint32_t, HealAcc>::iterator it = g_heal.begin(); it != g_heal.end();)
+        {
+            HealAcc& a = it->second;
+            if (a.any)
+            {
+                HealMsg m; m.victimNetId = it->first; m.blood = a.blood;
+                for (int i = 0; i < 32; ++i) if (a.d[i] > 0.001f) m.parts.push_back(std::make_pair((uint8_t)i, a.d[i]));
+                ByteWriter w; w.u8(netIdOwner(it->first)); m.write(w);
+                g_session.send(MSG_HEAL, w.data);
+                ++g_healsSent;
+                a = HealAcc();
+                ++it;
+            }
+            else g_heal.erase(it++);
+        }
+    }
+
     // ------------------------------------------------------------------ ghosts
     long g_floorFixes = 0, g_floorGiveUps = 0;   // ghost floor corrections (stats)
     struct Ghost
@@ -762,7 +835,11 @@ namespace
         Ogre::Vector3 prevFrameBody;    // body position last frame (its real speed)
         Ogre::Vector3 prevTarget, measVel;   // target position last frame, and the velocity it implies (smoothed)
         bool hasPrevTarget;
-        DWORD settleUntil;             // after a teleport: no snap/unblock checks until then
+        DWORD stallSince; bool unstickSent;   // stalled far from the owner: since when, unstick order given
+        Ogre::Vector3 placedFrom; int placeFails; DWORD noPlaceUntil;   // placements the engine ignored
+        DWORD lastTpAt; float prevDist; Ogre::Vector3 prevJTarget, prevBody;   // our last placement; offset and target one frame ago
+        Ogre::Vector3 prevJ; bool hasPrevJ; float lastNudge;             // frame-to-frame jump measure (tracking stats)
+        DWORD settleUntil;            // after a teleport: no snap/unblock checks until then
         DWORD lastSpeedCmd;             // speed matching: last command
         float speedCmd, baseMaxSpeed;   // value sent; the body's own max (restored when slow)
         double freezeMs;                // current streak: owner moving, body not
@@ -775,7 +852,7 @@ namespace
                   combatTarget(NULL), mirroredTask(-1), lastSpeed(-1), mode(MOVE), intervalMs(100),
                   lastSnapT(0), lastMoveCmd(0), lastFrame(0), hasVisual(false), visualPos(Ogre::Vector3::ZERO),
                   visualRot(Ogre::Quaternion::IDENTITY), blend(0), lastDrawn(Ogre::Vector3::ZERO),
-                  stuckSince(0), stuckTarget(Ogre::Vector3::ZERO), lastBody(Ogre::Vector3::ZERO), freezeMs(0), lastDest(Ogre::Vector3::ZERO), hasDest(false), prevTarget(Ogre::Vector3::ZERO), measVel(Ogre::Vector3::ZERO), hasPrevTarget(false),
+                  stuckSince(0), stuckTarget(Ogre::Vector3::ZERO), lastBody(Ogre::Vector3::ZERO), freezeMs(0), lastDest(Ogre::Vector3::ZERO), hasDest(false), prevTarget(Ogre::Vector3::ZERO), measVel(Ogre::Vector3::ZERO), hasPrevTarget(false), stallSince(0), unstickSent(false), placedFrom(Ogre::Vector3(1e9f, 0, 1e9f)), placeFails(0), noPlaceUntil(0), lastTpAt(0), prevDist(0), prevJTarget(Ogre::Vector3::ZERO), prevBody(Ogre::Vector3::ZERO), prevJ(Ogre::Vector3::ZERO), hasPrevJ(false), lastNudge(0),
                   lastFrameP(0), lastMoveAt(0), prevFrameBody(Ogre::Vector3::ZERO), settleUntil(0), lastSpeedCmd(0), speedCmd(0), baseMaxSpeed(0) {}
     };
     std::map<uint8_t, ClockSync> g_clocks;   // per remote player: its clock -> ours
@@ -1215,7 +1292,10 @@ namespace
         if (g.lastSnapT > 0 && snapLocalMs > g.lastSnapT)
         {
             double gap = snapLocalMs - g.lastSnapT;
-            if (gap < 2000) g.intervalMs += (gap - g.intervalMs) * 0.2;   // NPC LOD changes the rate
+            // NPC LOD changes the rate. A still body refreshes rarely: that long gap says nothing about
+            // how fast it will be sent once it moves, so it is ignored; a shorter gap is believed at once.
+            bool still = fabsf(s.vx) + fabsf(s.vz) < 0.5f;
+            if (gap < 2000 && !(still && gap > 300)) g.intervalMs += (gap - g.intervalMs) * (gap < g.intervalMs ? 0.6 : 0.2);
         }
         g.lastSnapT = snapLocalMs;
         g.interp.push(snap);
@@ -1321,6 +1401,7 @@ namespace
     double g_trackErrSum = 0, g_trackErrMax = 0;
     long g_trackErrN = 0;
     int g_snaps = 0;
+    long g_microJumps = 0, g_bigJumps = 0, g_jumpFrames = 0; double g_jumpMax = 0;
     double g_frozenMs = 0, g_movingMs = 0, g_longestFreezeMs = 0;
 
     const float STUCK_DISTANCE = 3.f;      // owner still, ghost further than this ...
@@ -1333,7 +1414,9 @@ namespace
     const float REPATH_NEAR = 6.f;         // next waypoint once this close to the current one
     const float REPATH_FAR = 15.f;         // ... or when the wanted destination moved this much
     const DWORD SETTLE_MS = 400;           // after a teleport: no snap/floor/stuck checks
-    const float SNAP_FAR = 150.f;          // beyond this a running ghost is placed anyway
+    const float SNAP_FAR = 250.f;          // beyond this a running ghost is placed anyway
+    const DWORD STALL_UNSTICK_MS = 1000;   // standing still and far: a direct move order first
+    const DWORD STALL_PLACE_MS = 3000;     // still not moving after that long: placed
     const double UNBLOCK_HARD_MS = 1000;   // body still this long while the owner runs: placed, even if the engine thinks it walks (pushing on an obstacle)
     const DWORD UNBLOCK_COOLDOWN_MS = 1500;
     const double FREEZE_COUNT_MS = 300;    // still longer than this while the owner moves: frozen
@@ -1344,7 +1427,7 @@ namespace
     const DWORD REPATH_MAX_MS = 1000;      // ... or this long after the previous one
     const double BLOCKED_MS = 300;         // owner moving, ghost body still this long: blocked
     const double UNBLOCK_TELEPORT_MS = 800;  // real stall this long: back on the path
-    long g_unblocks = 0;
+    long g_unblocks = 0, g_recreated = 0;
     long g_trailGlides = 0;
     const float NUDGE_BASE_SPEED = 1.5f;   // units/s of correction even for a tiny gap
     const float NUDGE_GAIN = 2.5f;         // + this per unit of gap (4 units -> 11.5 u/s)
@@ -1353,6 +1436,7 @@ namespace
 
     void driveGhosts(DWORD now)
     {
+        std::vector<uint32_t> recreate;
         for (std::map<uint32_t, Ghost>::iterator it = g_ghosts.begin(); it != g_ghosts.end(); ++it)
         {
             Ghost& g = it->second;
@@ -1401,6 +1485,36 @@ namespace
             Ogre::Vector3 gpos = c->getPosition();
             float dist = sqrtf((gpos.x - target.x) * (gpos.x - target.x) + (gpos.z - target.z) * (gpos.z - target.z));
             float speedNow = sqrtf(smp.vx * smp.vx + smp.vz * smp.vz);
+            // Visible jumps of the body from one frame to the next that neither the engine's own speed nor
+            // a placement of ours explains (statistics + the first few in the log, to find their cause).
+            {
+                bool settlingJ = now < g.settleUntil;
+                if (g.hasPrevJ && !settlingJ && frameMs > 0 && fabsf(g.prevJ.x) + fabsf(g.prevJ.z) > 100.f)   // (not drawn yet: at the origin)
+                {
+                    float fs = (float)(frameMs / 1000.0);
+                    // What is DRAWN is what the player sees (the render layer smooths the body's position).
+                    Ogre::Vector3 shown = gpos; safeDrawnPos(c, &shown);
+                    float disp = sqrtf((shown.x - g.prevJ.x) * (shown.x - g.prevJ.x) + (shown.z - g.prevJ.z) * (shown.z - g.prevJ.z));
+                    float bodyDisp = sqrtf((gpos.x - g.prevBody.x) * (gpos.x - g.prevBody.x) + (gpos.z - g.prevBody.z) * (gpos.z - g.prevBody.z));
+                    float eng = c->getMovementSpeed(); if (eng < speedNow) eng = speedNow;
+                    float allowed = (eng * 1.4f + 8.f) * fs + 1.2f;
+                    ++g_jumpFrames;
+                    if (disp > allowed)
+                    {
+                        if (disp >= 20.f) ++g_bigJumps; else ++g_microJumps;
+                        if (disp > g_jumpMax) g_jumpMax = disp;
+                        static int shown = 0, shownBig = 0;
+                        if (g_cfg.debugKeys && (disp >= 20.f ? shownBig < 60 : shown < 25))
+                        {
+                            if (disp >= 20.f) ++shownBig; else ++shown;
+                            log("jump %08x%s: SEEN %.1f (body %.1f) in %.0f ms (allowed %.1f), offset %.1f (was %.1f), target moved %.1f, our last placement %d ms ago, target speed %.1f, engine speed %.1f, mode %d, last nudge %.2f, indoors %d",
+                                it->first, isNpcNetId(it->first) ? " (NPC)" : "", disp, bodyDisp, frameMs, allowed, dist, g.prevDist, sqrtf((target.x - g.prevJTarget.x) * (target.x - g.prevJTarget.x) + (target.z - g.prevJTarget.z) * (target.z - g.prevJTarget.z)), g.lastTpAt ? (int)(now - g.lastTpAt) : -1, speedNow, eng, (int)g.mode, g.lastNudge, c->isIndoors().getBuilding() ? 1 : 0);
+                        }
+                    }
+                }
+                { Ogre::Vector3 shown2 = gpos; safeDrawnPos(c, &shown2); g.prevJ = shown2; g.prevBody = gpos; }
+                g.hasPrevJ = true; g.lastNudge = 0; g.prevDist = dist; g.prevJTarget = target;
+            }
             if (g.mode == Ghost::MOVE && speedNow > 0.5f) { g_trackErrSum += dist; ++g_trackErrN; if (dist > g_trackErrMax) g_trackErrMax = dist; }
             // Freeze, in real time: how long since the body last moved, while its owner moves. (The
             // engine updates other factions' bodies less often than we draw: a still frame or two
@@ -1425,8 +1539,35 @@ namespace
             // this copy, so running a little behind on the right path is invisible while a
             // teleport is not. A ghost that is running after its target is left to catch up
             // (speed boost); a stalled one, or one absurdly far, is placed.
-            if (!settling && (dist > SNAP_FAR || (dist > SNAP_DISTANCE + speedNow * 0.6f && safeStalled(c))))
+            // A ghost that stands still while far from its owner first gets a direct order (unstick);
+            // only after STALL_PLACE_MS of that, or when it is absurdly far, is it placed.
+            bool placeNow = false;
+            if (!settling && dist > SNAP_DISTANCE + speedNow * 0.6f && safeStalled(c))
             {
+                if (!g.stallSince) { g.stallSince = now; g.unstickSent = false; }
+                DWORD stalledFor = now - g.stallSince;
+                if (!g.unstickSent && stalledFor > STALL_UNSTICK_MS) { g.unstickSent = true; g.lastMoveCmd = now; g.lastDest = target; g.hasDest = true; safeMoveTo(c, &target); }
+                else if (stalledFor > STALL_PLACE_MS) placeNow = true;
+            }
+            else { g.stallSince = 0; g.unstickSent = false; }
+            // A placement the engine ignores (the spot is not loaded here...) is not repeated: after 3 in a
+            // row that left the body where it was, no more for a while (it would only flicker).
+            if (now < g.noPlaceUntil) placeNow = false;
+            if (!settling && (dist > SNAP_FAR || placeNow) && now >= g.noPlaceUntil)
+            {
+                if (g.placedFrom.distance(gpos) < 1.f)
+                {
+                    if (g_cfg.debugKeys)
+                        log("placement ignored %08x: dist %.1f, dead %d, unconscious %d, owner flags %d, mode %d, indoors %d, floor %d (owner %d), fails %d",
+                            it->first, dist, (int)safeDead(c), (int)safeUnconscious(c), (int)g.last.flags, (int)g.mode,
+                            c->isIndoors().getBuilding() ? 1 : 0, c->getFloor(), (int)g.last.floor, g.placeFails + 1);
+                    // The body sits in a zone the engine no longer simulates: recreate it where its owner is
+                    // (the owner re-announces its spawns every few seconds).
+                    if (++g.placeFails >= 3) { g.noPlaceUntil = now + 15000; g.placeFails = 0; recreate.push_back(it->first); }
+                }
+                else g.placeFails = 0;
+                g.placedFrom = gpos;
+                g.stallSince = 0; g.unstickSent = false;
                 ++g_snaps;
                 static DWORD lastSnapLog = 0;
                 if (g_cfg.debugKeys && now - lastSnapLog > 2000)
@@ -1435,7 +1576,7 @@ namespace
                     log("snap %08x: dist %.1f ghost (%.1f,%.1f,%.1f) -> target (%.1f,%.1f,%.1f), mode %d",
                         it->first, dist, gpos.x, gpos.y, gpos.z, target.x, target.y, target.z, (int)g.mode);
                 }
-                safeTeleport(c, &target, g.last.floor);
+                { g.lastTpAt = now; safeTeleport(c, &target, g.last.floor); }
                 g.follow.reset(); g.combatTarget = NULL; g.mirroredTask = -1;
                 g.trail.clear(); g.hasDest = false; g.settleUntil = now + SETTLE_MS; g.lastMoveAt = pnow;
                 continue;
@@ -1450,7 +1591,7 @@ namespace
                 // ghost would otherwise be teleported again every 400 ms.
                 if (++g.floorTries == 2) ++g_floorGiveUps;
                 ++g_floorFixes;
-                safeTeleport(c, &target, g.last.floor);
+                { g.lastTpAt = now; safeTeleport(c, &target, g.last.floor); }
                 g.follow.reset(); g.settleUntil = now + SETTLE_MS; g.lastMoveAt = pnow;
                 continue;
             }
@@ -1471,7 +1612,7 @@ namespace
                 else if (!settling && now - g.stuckSince > STUCK_MS && target.distance(g.stuckTarget) > 1.f)
                 {
                     ++g_unstucks;
-                    safeTeleport(c, &target, g.last.floor);
+                    { g.lastTpAt = now; safeTeleport(c, &target, g.last.floor); }
                     g.stuckTarget = target; g.stuckSince = 0; g.follow.reset(); g.settleUntil = now + SETTLE_MS;
                     continue;
                 }
@@ -1484,8 +1625,8 @@ namespace
                 (npcGhost ? lastNpcDiag : lastDiag) = now;
                 SpeedInfo si;
                 if (safeSpeedInfo(c, &si))
-                    log("drive %08x%s: target speed %.1f, offset %.2f | engine current %.1f max %.1f orders %d running %d pathOk %d pathFailed %d | owner flags %d delay %.0f ms, mode %d, indoors %d",
-                        it->first, isNpcNetId(it->first) ? " (NPC)" : "", speed, dist, si.current, si.max, si.orders, (int)si.running, (int)si.pathOk, (int)si.pathFailed, (int)g.last.flags, delay, (int)g.mode, c->isIndoors().getBuilding() ? 1 : 0);
+                    log("drive %08x%s: target speed %.1f, offset %.2f | engine current %.1f max %.1f orders %d running %d pathOk %d pathFailed %d | owner flags %d delay %.0f ms (send gap %.0f, jitter %.0f), mode %d, indoors %d",
+                        it->first, isNpcNetId(it->first) ? " (NPC)" : "", speed, dist, si.current, si.max, si.orders, (int)si.running, (int)si.pathOk, (int)si.pathFailed, (int)g.last.flags, delay, g.intervalMs, clock.jitterMs(), (int)g.mode, c->isIndoors().getBuilding() ? 1 : 0);
             }
             // Blocked while its owner moves (wedged on a corner): stop pushing in a straight line and
             // walk to the owner's exact spot. Only a long, real stall (engine stopped or no path)
@@ -1495,7 +1636,7 @@ namespace
             if (g_cfg.tuneUnblock && !settling && speedNow > 2.f && dist > 2.f && (g.freezeMs > UNBLOCK_HARD_MS || (g.freezeMs > UNBLOCK_TELEPORT_MS && safeStalled(c))))
             {
                 ++g_unblocks;
-                safeTeleport(c, &target, g.last.floor);
+                { g.lastTpAt = now; safeTeleport(c, &target, g.last.floor); }
                 g.follow.reset(); g.lastMoveAt = pnow; g.lastBody = target;
                 g.trail.clear(); g.hasDest = false; g.settleUntil = now + UNBLOCK_COOLDOWN_MS;
                 continue;
@@ -1509,7 +1650,11 @@ namespace
             {
                 if (speed >= 2.f)
                 {
-                    float want = speed * 1.15f + (dist > 3.f ? dist * 1.5f : 0.f);
+                    // Catching up is gentle: a lag closes over a couple of seconds at most 1.75x the owner's speed
+                    // (a sprint at 150 u/s behind a target that hopped looks like a teleport).
+                    float catchUp = dist > 3.f ? dist * 1.5f : 0.f;
+                    if (catchUp > speed * 0.6f + 12.f) catchUp = speed * 0.6f + 12.f;
+                    float want = speed * 1.15f + catchUp;
                     if (want > 150.f) want = 150.f;
                     if (g.speedCmd <= 0 || fabsf(want - g.speedCmd) > g.speedCmd * 0.1f)
                     {
@@ -1585,7 +1730,7 @@ namespace
                     {
                         Ogre::Vector3 np = gpos + dir * (step / len);
                         if (!safeNudge(c, &np)) { g_nudgeBroken = true; log("position nudge unavailable, using locomotion only"); }
-                        else ++g_trailGlides;
+                        else { ++g_trailGlides; g.lastNudge += step; }
                     }
                 }
             }
@@ -1605,9 +1750,17 @@ namespace
                     float step = len < maxStep ? len : maxStep;
                     Ogre::Vector3 np = pos + dir * (step / len);
                     if (!safeNudge(c, &np)) { g_nudgeBroken = true; log("position nudge unavailable, using locomotion only"); }
+                    else g.lastNudge += step;
                 }
             }
         }
+        for (size_t i = 0; i < recreate.size(); ++i)
+        {
+            ++g_recreated;
+            if (g_cfg.debugKeys) log("ghost %08x recreated (its body could not be placed)", recreate[i]);
+            despawnGhost(recreate[i]);
+        }
+        flushHeals(now);
     }
 }
 
@@ -2583,6 +2736,14 @@ void chars_onMessage(const NetEvent& e)
         if (r.ok() && target == g_session.localId()) applyIncomingDamage(d, e.sender);
         break;
     }
+    case MSG_HEAL:
+    {
+        uint8_t target = r.u8();
+        HealMsg h; h.read(r);
+        h.sanitize();
+        if (r.ok() && target == g_session.localId()) applyIncomingHeal(h);
+        break;
+    }
     case MSG_SHOT:
     {
         uint32_t shooter = r.u32();
@@ -2726,6 +2887,59 @@ void medApply_hook(MedicalSystem* self, MedicalSystem::HealthPartStatus* part, c
     if (!loading && !g_judgeDepth && self && judgeHit(self->me, part, dmg) != HIT_APPLY) return;
     struct Depth { Depth() { ++g_judgeDepth; } ~Depth() { --g_judgeDepth; } } depth;   // also undone if the engine throws
     medApply_orig(self, part, dmg, loading, canSever, force);
+}
+
+// First aid, doctoring, robot repair: when the patient is the copy of somebody else's character, what the care
+// changed is measured and sent to the owner (see flushHeals); the copy is overwritten by the owner's state anyway.
+struct HealSnap { uint32_t id; int n; float flesh[32]; float blood; MedicalSystem* m; };
+static bool healBegin(MedicalSystem* self, HealSnap& s)
+{
+    if (!self || !ready() || g_applyingSync) return false;
+    for (std::map<uint32_t, Ghost>::iterator it = g_ghosts.begin(); it != g_ghosts.end(); ++it)
+    {
+        Character* c = it->second.h.getCharacter();
+        if (!c || &c->medical != self) continue;
+        s.id = it->first; s.m = self; s.blood = self->blood;
+        s.n = (int)self->anatomy.size(); if (s.n > 32) s.n = 32;
+        for (int i = 0; i < s.n; ++i) s.flesh[i] = self->anatomy[i]->flesh;
+        return true;
+    }
+    return false;
+}
+static void healEnd(const HealSnap& s)
+{
+    HealAcc& a = g_heal[s.id];
+    for (int i = 0; i < s.n && i < (int)s.m->anatomy.size(); ++i)
+    {
+        float d = s.m->anatomy[i]->flesh - s.flesh[i];
+        if (d > 0.001f) { a.d[i] += d; a.any = true; }
+    }
+    float b = s.m->blood - s.blood;
+    if (b > 0.001f) { a.blood += b; a.any = true; }
+}
+bool (*firstAid_orig)(MedicalSystem*, float, Item*, float, Character*) = NULL;
+bool firstAid_hook(MedicalSystem* self, float skill, Item* eq, float dt, Character* who)
+{
+    HealSnap s; bool on = healBegin(self, s);
+    bool r = firstAid_orig(self, skill, eq, dt, who);
+    if (on) healEnd(s);
+    return r;
+}
+bool (*doctoring_orig)(MedicalSystem*, float, Item*, float, Character*) = NULL;
+bool doctoring_hook(MedicalSystem* self, float skill, Item* eq, float dt, Character* who)
+{
+    HealSnap s; bool on = healBegin(self, s);
+    bool r = doctoring_orig(self, skill, eq, dt, who);
+    if (on) healEnd(s);
+    return r;
+}
+bool (*rigging_orig)(MedicalSystem*, float, Item*, float) = NULL;
+bool rigging_hook(MedicalSystem* self, float skill, Item* eq, float dt)
+{
+    HealSnap s; bool on = healBegin(self, s);
+    bool r = rigging_orig(self, skill, eq, dt);
+    if (on) healEnd(s);
+    return r;
 }
 
 // CombatClass::_getHit: remembers the attacker for the medical hooks above.
@@ -2962,6 +3176,7 @@ void chars_logHitStats()
     if (g_trackErrN)
         log("ghost tracking: mean offset %.2f, max %.2f (units) over %ld frame-samples, %d snap(s)",
             g_trackErrSum / g_trackErrN, g_trackErrMax, g_trackErrN, g_snaps);
+    if (g_jumpFrames) { log("ghost tracking: %ld unexplained jump(s) under 20 units and %ld of 20+ in %ld frame-samples (largest %.1f)", g_microJumps, g_bigJumps, g_jumpFrames, g_jumpMax); g_microJumps = g_bigJumps = g_jumpFrames = 0; g_jumpMax = 0; }
     if (g_unstucks) log("ghost tracking: %ld stuck ghost(s) placed next to their owner", g_unstucks);
     if (g_immuneCalls) { log("ghost tracking: off-screen mode refused %ld time(s)", g_immuneCalls); g_immuneCalls = 0; }
     if (g_immuneNpcCalls) { log("ghost tracking: off-screen mode refused %ld time(s) for host NPCs near us", g_immuneNpcCalls); g_immuneNpcCalls = 0; }
@@ -2980,6 +3195,12 @@ bool chars_install()
     if (KenshiLib::SUCCESS != KenshiLib::AddHook(KenshiLib::GetRealAddress(&MedicalSystem::HealthPartStatus::applyDamage),
                                                  applyDamage_hook, &applyDamage_orig))
     { ErrorLog("KenshiMP: could not hook applyDamage!"); ok = false; }
+    if (KenshiLib::SUCCESS != KenshiLib::AddHook(KenshiLib::GetRealAddress(&MedicalSystem::applyFirstAid), firstAid_hook, &firstAid_orig))
+        ErrorLog("KenshiMP: could not hook applyFirstAid (treating a friend will not reach him)");
+    if (KenshiLib::SUCCESS != KenshiLib::AddHook(KenshiLib::GetRealAddress(&MedicalSystem::applyDoctoring), doctoring_hook, &doctoring_orig))
+        ErrorLog("KenshiMP: could not hook applyDoctoring");
+    if (KenshiLib::SUCCESS != KenshiLib::AddHook(KenshiLib::GetRealAddress(&MedicalSystem::applyRigging), rigging_hook, &rigging_orig))
+        ErrorLog("KenshiMP: could not hook applyRigging");
     if (KenshiLib::SUCCESS != KenshiLib::AddHook(KenshiLib::GetRealAddress(MedicalAccess::address()),
                                                  medApply_hook, &medApply_orig))
     { ErrorLog("KenshiMP: could not hook MedicalSystem::applyDamage!"); ok = false; }

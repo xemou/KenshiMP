@@ -44,7 +44,9 @@ public:
             double dArr = (double)(int32_t)(localMs - lastArrival_);
             double dSend = (double)(int32_t)(senderMs - lastSender_);
             double dev = fabs(dArr - dSend);
-            jitter_ += (dev - jitter_) * 0.1;
+            // A discontinuity (the sender's clock jumped, a long pause) is not network jitter: ignore it,
+            // and cap what one packet can add so a single odd one never drags the render delay up.
+            if (dev < 2000.0) { if (dev > 250.0) dev = 250.0; jitter_ += (dev - jitter_) * 0.1; }
         }
         lastArrival_ = localMs; lastSender_ = senderMs;
     }
@@ -210,9 +212,9 @@ private:
 // Render delay: two send intervals plus a jitter margin, bounded.
 inline double renderDelayMs(double sendIntervalMs, double jitterMs)
 {
-    double d = 2.0 * sendIntervalMs + 2.5 * jitterMs;
-    if (d < 60.0) d = 60.0;
-    if (d > 300.0) d = 300.0;
+    double d = 1.6 * sendIntervalMs + 2.0 * jitterMs;   // just over one packet behind, plus the link's jitter
+    if (d < 50.0) d = 50.0;
+    if (d > 250.0) d = 250.0;
     return d;
 }
 
