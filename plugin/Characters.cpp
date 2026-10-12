@@ -792,6 +792,149 @@ namespace
         }
     }
 
+    // ------------------------------------------------------------------ carried characters
+    // Our character, knocked out, carried / caged / put to bed by another player: that player's game moves the
+    // copy and sends us where our real character must be. It stays ours: we only follow, for as long as the messages
+    // keep coming (3 s without one: let go).
+    struct HeldChar { uint8_t by; uint8_t state; Ogre::Vector3 pos; Ogre::Quaternion rot; int8_t floor; DWORD last, lastKo, pickUntil; bool escaping; };
+    std::map<uint32_t, HeldChar> g_held;
+    long g_heldMessages = 0;
+
+    bool safeKnockOut(Character* c, float seconds)
+    {
+        __try { c->medical.knockoutForceTimer(seconds); return true; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    bool safeForceKo(Character* c)
+    {
+        __try { c->medical.knockoutForceTimer(1.0f); return true; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    // What the engine says about a ghost that one of our characters took: 0 free, 1 carried, 2 in bed, 3 in a cage.
+    int safeHeldState(Character* c)
+    {
+        __try
+        {
+            if (c->isBeingCarried()) return CarriedMsg::CARRIED;
+            if (c->inSomething == IN_BED) return CarriedMsg::IN_BED;
+            if (c->inSomething == IN_PRISON) return CarriedMsg::IN_CAGE;
+            return 0;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+    }
+    void releaseHeld(uint32_t id, Character* c, const HeldChar& h)
+    {
+        if (c) { Ogre::Vector3 p = h.pos; if (c->getPosition().distance(p) > 2.f) safeTeleport(c, &p, h.floor); }
+        log("character %08x let go by %s", id, playerName(h.by).c_str());
+    }
+    void applyIncomingCarried(CarriedMsg m, uint8_t sender)
+    {
+        if (netIdOwner(m.netId) != g_session.localId() || sender == g_session.localId()) return;
+        Character* c = localByNetId(m.netId);
+        if (!c) return;
+        std::map<uint32_t, HeldChar>::iterator it = g_held.find(m.netId);
+        if (m.state == CarriedMsg::FREE)
+        {
+            if (it != g_held.end() && it->second.by == sender)
+            {
+                it->second.pos = Ogre::Vector3(m.x, m.y, m.z); it->second.floor = m.floor;
+                releaseHeld(m.netId, c, it->second);
+                g_held.erase(it);
+            }
+            return;
+        }
+        if (it == g_held.end())
+        {
+            if (safeDead(c) || !safeUnconscious(c)) return;   // only a knocked-out character can be taken
+            HeldChar h; h.by = sender; h.state = m.state; h.last = h.lastKo = GetTickCount(); h.pickUntil = 0; h.floor = m.floor; h.escaping = false;
+            h.pos = Ogre::Vector3(m.x, m.y, m.z); h.rot = Ogre::Quaternion(m.qw, m.qx, m.qy, m.qz);
+            it = g_held.insert(std::make_pair(m.netId, h)).first;
+            showMessage(TF("%s is carrying your knocked-out character.", playerName(sender).c_str()));
+            log("character %08x taken by %s (state %d)", m.netId, playerName(sender).c_str(), (int)m.state);
+        }
+        else if (it->second.by != sender) return;   // the first one to take it keeps it
+        HeldChar& h = it->second;
+        h.state = m.state; h.pos = Ogre::Vector3(m.x, m.y, m.z); h.rot = Ogre::Quaternion(m.qw, m.qx, m.qy, m.qz);
+        h.floor = m.floor; h.last = GetTickCount();
+        ++g_heldMessages;
+    }
+    // A character locked in another player's cage: the player orders it to pick the lock, like on a normal cage or chest.
+    // The work takes 6 to 14 s (the better its lockpicking, the faster and the likelier: 25 % at 0, 90 % at 100);
+    // a failure can be tried again.
+    float safeLockpicking(Character* c)
+    {
+        __try { return c->stats ? c->stats->getStat(STAT_LOCKPICKING, false) : 0.f; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return 0.f; }
+    }
+    // The cage the copy is in lets it go (our engine's own release of a prisoner).
+    bool safeFreeFromCage(Character* c)
+    {
+        __try
+        {
+            if (c->inSomething != IN_PRISON) return false;
+            Building* b = c->inWhat.getBuilding();
+            UseableStuff* us = b ? b->getUseableStuff() : NULL;
+            c->setPrisonMode(false, us);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    void startPick(uint32_t id, Character* c, HeldChar& h, DWORD now)
+    {
+        float skill = safeLockpicking(c);
+        if (skill < 0.f) skill = 0.f; if (skill > 100.f) skill = 100.f;
+        h.pickUntil = now + 6000 + (DWORD)((100.f - skill) * 80.f);
+        log("character %08x starts picking the lock of the cage (lockpicking %.0f, %lu ms)", id, skill, (unsigned long)(h.pickUntil - now));
+        showMessage(T("Your character is picking the lock..."));
+    }
+    void resolvePick(uint32_t id, Character* c, HeldChar& h)
+    {
+        h.pickUntil = 0;
+        float skill = safeLockpicking(c);
+        if (skill < 0.f) skill = 0.f; if (skill > 100.f) skill = 100.f;
+        float chance = 0.25f + skill / 100.f * 0.65f;
+        bool ok = (rand() % 10000) < (int)(chance * 10000.f);
+        static int testAttempts = 0;
+        if (g_cfg.autotestCarry) ok = ++testAttempts >= 2;   // test: the first try fails, the second succeeds
+        log("character %08x picked the lock of the cage (lockpicking %.0f, chance %.0f %%): %s", id, skill, chance * 100.f, ok ? "got out" : "failed");
+        if (!ok) { showMessage(T("Your character failed to pick the lock.")); return; }
+        h.escaping = true;
+        ByteWriter w; w.u8(h.by); w.u32(id);
+        g_session.send(MSG_ESCAPED, w.data);
+        showMessage(T("Your character picked the lock and got out of the cage!"));
+    }
+    // Every frame: our carried characters follow the carrier's copy.
+
+    void updateHeld(DWORD now)
+    {
+        for (std::map<uint32_t, HeldChar>::iterator it = g_held.begin(); it != g_held.end();)
+        {
+            Character* c = localByNetId(it->first);
+            HeldChar& h = it->second;
+            if (!c || safeDead(c) || now - h.last > 3000) { if (c && !safeDead(c)) releaseHeld(it->first, c, h); g_held.erase(it++); continue; }
+            if (h.state != CarriedMsg::IN_CAGE && now - h.lastKo > 500)   // a carried or bedded character stays down (a prisoner may wake up)
+            {
+                h.lastKo = now;
+                if (!safeUnconscious(c)) safeForceKo(c);
+            }
+            if (h.pickUntil && now >= h.pickUntil && !h.escaping) resolvePick(it->first, c, h);
+            Ogre::Vector3 cur = c->getPosition();
+            float d = cur.distance(h.pos);
+            if (d > 12.f) safeTeleport(c, &h.pos, h.floor);
+            else if (d > 0.05f) { Ogre::Vector3 np = cur + (h.pos - cur) * 0.5f; safeNudge(c, &np); }
+            ++it;
+        }
+    }
+    void sendCarried(uint32_t id, int state, Character* c)
+    {
+        CarriedMsg m; m.netId = id; m.state = (uint8_t)state;
+        Ogre::Vector3 p = c->getPosition(); Ogre::Quaternion q = c->getOrientation();
+        m.x = p.x; m.y = p.y; m.z = p.z; m.qx = q.x; m.qy = q.y; m.qz = q.z; m.qw = q.w;
+        int fl = c->getFloor(); m.floor = (int8_t)(fl < 0 ? 0 : (fl > 20 ? 20 : fl));
+        ByteWriter w; w.u8(netIdOwner(id)); m.write(w);
+        g_session.send(MSG_CARRIED, w.data);
+    }
+
     // ------------------------------------------------------------------ ghosts
     long g_floorFixes = 0, g_floorGiveUps = 0;   // ghost floor corrections (stats)
     struct Ghost
@@ -838,6 +981,7 @@ namespace
         DWORD stallSince; bool unstickSent;   // stalled far from the owner: since when, unstick order given
         Ogre::Vector3 placedFrom; int placeFails; DWORD noPlaceUntil;   // placements the engine ignored
         DWORD lastTpAt; float prevDist; Ogre::Vector3 prevJTarget, prevBody;   // our last placement; offset and target one frame ago
+        bool held; int heldState; DWORD lastCarrySend;                    // one of our characters carries / cages / beds this copy
         Ogre::Vector3 prevJ; bool hasPrevJ; float lastNudge;             // frame-to-frame jump measure (tracking stats)
         DWORD settleUntil;            // after a teleport: no snap/unblock checks until then
         DWORD lastSpeedCmd;             // speed matching: last command
@@ -852,7 +996,7 @@ namespace
                   combatTarget(NULL), mirroredTask(-1), lastSpeed(-1), mode(MOVE), intervalMs(100),
                   lastSnapT(0), lastMoveCmd(0), lastFrame(0), hasVisual(false), visualPos(Ogre::Vector3::ZERO),
                   visualRot(Ogre::Quaternion::IDENTITY), blend(0), lastDrawn(Ogre::Vector3::ZERO),
-                  stuckSince(0), stuckTarget(Ogre::Vector3::ZERO), lastBody(Ogre::Vector3::ZERO), freezeMs(0), lastDest(Ogre::Vector3::ZERO), hasDest(false), prevTarget(Ogre::Vector3::ZERO), measVel(Ogre::Vector3::ZERO), hasPrevTarget(false), stallSince(0), unstickSent(false), placedFrom(Ogre::Vector3(1e9f, 0, 1e9f)), placeFails(0), noPlaceUntil(0), lastTpAt(0), prevDist(0), prevJTarget(Ogre::Vector3::ZERO), prevBody(Ogre::Vector3::ZERO), prevJ(Ogre::Vector3::ZERO), hasPrevJ(false), lastNudge(0),
+                  stuckSince(0), stuckTarget(Ogre::Vector3::ZERO), lastBody(Ogre::Vector3::ZERO), freezeMs(0), lastDest(Ogre::Vector3::ZERO), hasDest(false), prevTarget(Ogre::Vector3::ZERO), measVel(Ogre::Vector3::ZERO), hasPrevTarget(false), stallSince(0), unstickSent(false), placedFrom(Ogre::Vector3(1e9f, 0, 1e9f)), placeFails(0), noPlaceUntil(0), held(false), heldState(0), lastCarrySend(0), lastTpAt(0), prevDist(0), prevJTarget(Ogre::Vector3::ZERO), prevBody(Ogre::Vector3::ZERO), prevJ(Ogre::Vector3::ZERO), hasPrevJ(false), lastNudge(0),
                   lastFrameP(0), lastMoveAt(0), prevFrameBody(Ogre::Vector3::ZERO), settleUntil(0), lastSpeedCmd(0), speedCmd(0), baseMaxSpeed(0) {}
     };
     std::map<uint8_t, ClockSync> g_clocks;   // per remote player: its clock -> ours
@@ -1443,6 +1587,27 @@ namespace
             Character* c = g.h.getCharacter();
             if (!c || g.interp.empty()) continue;
 
+            // Taken by one of our characters (knocked out, carried / caged / in bed): our engine moves the copy;
+            // its owner is told where it is, and our own tracking leaves it alone.
+            if (!isNpcNetId(it->first))
+            {
+                int hs = safeHeldState(c);
+                if (hs)
+                {
+                    if (!g.held) log("ghost %08x taken (state %d)", it->first, hs);
+                    g.held = true; g.heldState = hs; g.blend = 0.f;
+                    if (now - g.lastCarrySend >= 100) { g.lastCarrySend = now; sendCarried(it->first, hs, c); }
+                    continue;
+                }
+                if (g.held)
+                {
+                    g.held = false; g.heldState = 0;
+                    sendCarried(it->first, 0, c);
+                    log("ghost %08x let go", it->first);
+                    g.follow.reset(); g.trail.clear(); g.hasDest = false; g.settleUntil = now + SETTLE_MS; g.lastMoveAt = preciseTick();
+                }
+            }
+
             ClockSync& clock = g_clocks[netIdOwner(it->first)];
             double delay = renderDelayMs(g.intervalMs, clock.jitterMs());
             double pnow = preciseTick();
@@ -1838,6 +2003,63 @@ uint32_t chars_netIdOf(Character* c)
 }
 
 bool chars_isGhost(Character* c) { return c && ghostIdOf(c) != 0; }
+
+// Test: our character picks up the first knocked-out ghost of another player (what the Pick up order does).
+std::string chars_debugCarryGhost(Character* me)
+{
+    for (std::map<uint32_t, Ghost>::iterator it = g_ghosts.begin(); it != g_ghosts.end(); ++it)
+    {
+        if (isNpcNetId(it->first)) continue;
+        Character* c = it->second.h.getCharacter();
+        if (!c || !(it->second.last.flags & EntityState::UNCONSCIOUS)) continue;
+        Ogre::Vector3 at = c->getPosition();
+        bool ok = safeOrder(me, LIFT_PERSON_SNATCHING_ALLOWED, c, &at);
+        char b[160]; sprintf_s(b, "order Lift person on ghost %08x, %.0f units away -> %s", it->first, me->getPosition().distance(at), ok ? "given" : "failed");
+        return b;
+    }
+    return "no knocked-out ghost of another player";
+}
+
+// Test: what became of the ghost we picked up (engine state, and what its owner was told).
+std::string chars_debugCarryState()
+{
+    char b[200]; std::string out;
+    for (std::map<uint32_t, Ghost>::iterator it = g_ghosts.begin(); it != g_ghosts.end(); ++it)
+    {
+        if (isNpcNetId(it->first)) continue;
+        Character* c = it->second.h.getCharacter();
+        if (!c) continue;
+        sprintf_s(b, "ghost %08x: held=%d (engine state %d), carried=%d, at (%.0f,%.0f,%.0f); ", it->first, (int)it->second.held, safeHeldState(c), (int)c->isBeingCarried(), c->getPosition().x, c->getPosition().y, c->getPosition().z);
+        out += b;
+    }
+    return out.empty() ? "no ghost" : out;
+}
+
+// Test: our first character is knocked out for `seconds` (another player may then carry it).
+std::string chars_debugKnockOutSelf(Character* me, float seconds)
+{
+    if (!me) return "no character";
+    if (!safeKnockOut(me, seconds)) return "failed";
+    char b[100]; sprintf_s(b, "knocked out for %.0f s at (%.0f,%.0f,%.0f)", seconds, me->getPosition().x, me->getPosition().y, me->getPosition().z);
+    return b;
+}
+
+// Test: the player orders our (caged) character to pick the lock.
+std::string chars_debugPickLock(Character* me)
+{
+    Ogre::Vector3 at = me->getPosition();
+    bool ok = safeOrder(me, PICK_LOCK, NULL, &at);
+    return ok ? "order Pick lock given" : "order failed";
+}
+
+// Test: are our characters being held by another player, and where are they now.
+std::string chars_debugHeldReport(Character* me)
+{
+    char b[220];
+    sprintf_s(b, "%d character(s) held, %ld position message(s) received; ours is at (%.0f,%.0f,%.0f), knocked out %d", (int)g_held.size(), g_heldMessages,
+              me ? me->getPosition().x : 0.f, me ? me->getPosition().y : 0.f, me ? me->getPosition().z : 0.f, me ? (int)safeUnconscious(me) : -1);
+    return b;
+}
 
 bool chars_debugAttack(Character* attacker, Character* target)
 {
@@ -2512,7 +2734,7 @@ void chars_renderTick(DWORD now)
         if (!c || !g.hasVisual) continue;
         Ogre::Vector3 body = c->getPosition();
         // Only while simply moving: in combat, tasks, KO... the body's exact place matters.
-        bool want = g.mode == Ghost::MOVE && body.distance(g.visualPos) < MAX_VISUAL_OFFSET;
+        bool want = g.mode == Ghost::MOVE && !g.held && body.distance(g.visualPos) < MAX_VISUAL_OFFSET;
         g.blend += (want ? 1.f : -1.f) * dt / BLEND_IN_MS;
         if (g.blend < 0.f) g.blend = 0.f;
         if (g.blend > 1.f) g.blend = 1.f;
@@ -2572,6 +2794,7 @@ static void refreshNearNpcs(DWORD now)
 void chars_tick(DWORD now)
 {
     driveGhosts(now);   // every frame
+    updateHeld(now);
     if (g_cfg.tuneOnScreen) refreshNearNpcs(now);
     if (now - g_lastState >= STATE_PERIOD_MS)
     {
@@ -2734,6 +2957,22 @@ void chars_onMessage(const NetEvent& e)
         DamageMsg d; d.read(r);
         d.sanitize();
         if (r.ok() && target == g_session.localId()) applyIncomingDamage(d, e.sender);
+        break;
+    }
+    case MSG_ESCAPED:
+    {
+        uint8_t target = r.u8(); uint32_t id = r.u32();
+        if (!r.ok() || target != g_session.localId() || netIdOwner(id) != e.sender) break;
+        std::map<uint32_t, Ghost>::iterator gi = g_ghosts.find(id);
+        Character* c = gi == g_ghosts.end() ? NULL : gi->second.h.getCharacter();
+        if (c && gi->second.held) log("ghost %08x picked the lock: let out (%s)", id, safeFreeFromCage(c) ? "done" : "engine refused");
+        break;
+    }
+    case MSG_CARRIED:
+    {
+        uint8_t target = r.u8();
+        CarriedMsg m; m.read(r);
+        if (r.ok() && target == g_session.localId() && m.sanitize()) applyIncomingCarried(m, e.sender);
         break;
     }
     case MSG_HEAL:
@@ -3130,6 +3369,7 @@ static bool isTakeBodyTask(int t)
     switch (t)
     {
     case PICKUP: case USE_CAGE: case PUT_SOMEONE_IN_BED: case FIND_BED_AND_PUT_IN:
+    case LIFT_PERSON: case LIFT_PERSON_SNATCHING_ALLOWED: case PUT_DOWN_CHARACTER_IN_BED: case GET_PUT_IN_BED:
     case KNOCKOUT_PRISONER: case CARRY_WOUNDED_SLAVES: case LIFT_OBJECT_BUT_HEAL_FIRST:
         return true;
     default:
@@ -3140,6 +3380,21 @@ static bool isTakeBodyTask(int t)
 void (*addOrder_orig)(Character*, Building*, TaskType, RootObject*, bool, bool, const Ogre::Vector3&) = NULL;
 void addOrder_hook(Character* self, Building* dest, TaskType t, RootObject* subject, bool shift, bool clear, const Ogre::Vector3& loc)
 {
+    // One of our characters that another player is carrying, caging or has put to bed takes no orders.
+    if (ready() && self && !g_held.empty() && !g_applyingSync && !chars_isGhost(self))
+    {
+        uint32_t mine = chars_netIdOf(self);
+        std::map<uint32_t, HeldChar>::iterator hi = mine ? g_held.find(mine) : g_held.end();
+        if (hi != g_held.end())
+        {
+            // In a cage, the lock can be picked (the player's order); nothing else is possible.
+            bool lockTask = t == PICK_LOCK || t == PICK_LOCK_ON_SHACKLES || t == UNLOCK_DOOR_PLAYER_ORDER;
+            if (lockTask && hi->second.state == CarriedMsg::IN_CAGE && !hi->second.escaping)
+            { if (!hi->second.pickUntil) startPick(mine, self, hi->second, GetTickCount()); }
+            else showMessage(T("Your character is being held and cannot receive orders."));
+            return;
+        }
+    }
     if (ready() && self && subject && isTakeBodyTask(t) && !chars_isGhost(self))
     {
         hand h(subject);
@@ -3148,10 +3403,18 @@ void addOrder_hook(Character* self, Building* dest, TaskType t, RootObject* subj
         {
             if (!isNpcNetId(id))
             {
-                showMessage(T("You cannot carry or cage another player's character."));
-                return;
+                // Another player's character: only when it is knocked out (no war needed). It stays its owner's;
+                // our engine carries / cages / beds the copy and tells the owner where it is (driveGhosts).
+                std::map<uint32_t, Ghost>::iterator gi = g_ghosts.find(id);
+                bool down = gi != g_ghosts.end() && (gi->second.last.flags & EntityState::UNCONSCIOUS) != 0 &&
+                            !(gi->second.last.flags & EntityState::DEAD);
+                if (!down || t == KNOCKOUT_PRISONER)
+                {
+                    showMessage(T("Only a knocked-out character can be carried, caged or put to bed."));
+                    return;
+                }
             }
-            chars_claimWhenNear(id, target);
+            else chars_claimWhenNear(id, target);
         }
     }
     addOrder_orig(self, dest, t, subject, shift, clear, loc);

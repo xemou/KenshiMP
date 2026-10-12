@@ -16,7 +16,7 @@
 
 namespace mp {
 
-const uint32_t PROTOCOL_VERSION = 21;
+const uint32_t PROTOCOL_VERSION = 22;
 
 // World NPCs replicated by the host use the upper half of the host's local id space.
 const uint32_t NPC_ID_FLAG = 0x800000;
@@ -75,7 +75,10 @@ enum MsgType
                           //      (MSG_INVENTORY, kind CONTAINER_WORLD) while it stays open, transfers go to the host
     MSG_REGROUP,          // u8 targetPlayer : the sender's squad was moved next to that player's characters (F4 / "/goto")
     MSG_INVENTORY_REQUEST, // c->owner u8 targetPlayer, u8 kind, u32 containerNetId : "your MSG_INVENTORY of this NPC never reached me, send it again"
-    MSG_HEAL              // u8 targetPlayer, HealMsg : first aid / doctoring given to a copy of the target's character (the owner applies it to the real one)
+    MSG_HEAL,             // u8 targetPlayer, HealMsg : first aid / doctoring given to a copy of the target's character (the owner applies it to the real one)
+    MSG_CARRIED,          // u8 targetPlayer, CarriedMsg : the copy of the target's knocked-out character is being carried / caged / put to bed here
+    MSG_ESCAPED,          // u8 targetPlayer, u32 netId : the character you caged picked the lock: let it out
+    MSG_SPEED             // f32 speed : the game speed this player chose (x1, x2, x3); it applies only when everybody chose the same
 };
 
 inline bool isRelayed(uint8_t t) { return t >= MSG_ENTITY_STATE; }
@@ -453,6 +456,38 @@ struct HealMsg
     {
         for (size_t i = 0; i < parts.size(); ++i) parts[i].second = clampF(parts[i].second, 0, MAX_HEAL);
         blood = clampF(blood, 0, MAX_HEAL * 10);
+    }
+};
+
+
+// A knocked-out character carried, caged or put to bed by another player: that player's game moves the copy,
+// and tells the owner where its real character must be (state 0: let go, the position is where it was dropped).
+struct CarriedMsg
+{
+    enum State { FREE = 0, CARRIED = 1, IN_BED = 2, IN_CAGE = 3 };
+    uint32_t netId;
+    uint8_t state;
+    float x, y, z;
+    float qx, qy, qz, qw;
+    int8_t floor;
+
+    CarriedMsg() : netId(0), state(0), x(0), y(0), z(0), qx(0), qy(0), qz(0), qw(1), floor(0) {}
+    void write(ByteWriter& w) const
+    {
+        w.u32(netId); w.u8(state); w.f32(x); w.f32(y); w.f32(z); w.f32(qx); w.f32(qy); w.f32(qz); w.f32(qw); w.u8((uint8_t)floor);
+    }
+    void read(ByteReader& r)
+    {
+        netId = r.u32(); state = r.u8(); x = r.f32(); y = r.f32(); z = r.f32();
+        qx = r.f32(); qy = r.f32(); qz = r.f32(); qw = r.f32(); floor = (int8_t)r.u8();
+    }
+    // False if unusable (unknown state, bad position).
+    bool sanitize()
+    {
+        if (state > IN_CAGE || !validPos(x, y, z)) return false;
+        if (!finiteF(qx) || !finiteF(qy) || !finiteF(qz) || !finiteF(qw)) { qx = qy = qz = 0; qw = 1; }
+        if (floor < 0 || floor > 20) floor = 0;
+        return true;
     }
 };
 

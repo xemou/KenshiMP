@@ -50,13 +50,14 @@ struct Config
     int backupSaves;       // host: backups kept per save (copied when a hosted game is ready), 0 = off
     std::string autotestLoad;  // test: save loaded automatically from the title screen
     bool autotest;             // test: scripted checks once another player is there (log "autotest:")
+    bool autotestCarry;        // test: carry a knocked-out ghost, then get knocked out and carried
     bool autotestGotoShop;     // test: the squad is moved next to the nearest shop (shop shelves in reach)
     std::string lobbyKeyName;
     Config() : mode("off"), address("127.0.0.1"), port(47000), name("Player"), faction("My Faction"),
                relation(0), ghostAI("none"), syncAppearance(true), syncEquipment(true), syncBuildings(true),
                debugKeys(false), npcSync(true), strictMods(true), autoReconnect(true), pauseSync(true),
                renderSmoothing(true), weatherSync(true), lobbyKey(VK_F4), lobbyKeyName("F4"), language("auto"), playersOnMap(true),
-               tuneSpeedMatch(true), tuneTrail(true), tuneRepath(true), tuneUnblock(true), tuneOnScreen(true), ghostNoCollide(false), loadSharing(false), assaultHostility(false), playerNames(true), townSync(true), backupSaves(5), autotest(false), autotestGotoShop(false) {}
+               tuneSpeedMatch(true), tuneTrail(true), tuneRepath(true), tuneUnblock(true), tuneOnScreen(true), ghostNoCollide(false), loadSharing(false), assaultHostility(false), playerNames(true), townSync(true), backupSaves(5), autotest(false), autotestGotoShop(false), autotestCarry(false) {}
 };
 
 extern mp::Session g_session;
@@ -130,6 +131,11 @@ std::string chars_regroupTo(uint8_t owner);   // move our selected characters ne
 void chars_onRegroup(uint8_t who, uint8_t target);   // MSG_REGROUP received
 Character* chars_ghostNear(uint8_t owner, const Ogre::Vector3& pos, float maxDist); // that player's nearest ghost
 bool chars_debugAttack(Character* attacker, Character* target);   // debug: attack order
+std::string chars_debugCarryGhost(Character* me);      // test: pick up the first knocked-out ghost
+std::string chars_debugCarryState();                  // test: state of the ghosts we may have picked up
+std::string chars_debugKnockOutSelf(Character* me, float seconds);   // test: our character is knocked out
+std::string chars_debugHeldReport(Character* me);     // test: our characters held by another player
+std::string chars_debugPickLock(Character* me);       // test: order our caged character to pick the lock
 
 // Buildings.cpp
 bool builds_install();
@@ -256,6 +262,10 @@ void world_tick(DWORD now);
 void world_reset();
 void world_sendNow();                    // host: send the clock at the next tick (join, resync)
 void world_onMessage(const mp::NetEvent& e);
+void world_onSpeed(const mp::NetEvent& e);      // another player's chosen game speed
+void world_onPlayerLeft(uint8_t id);                // forget its chosen speed
+void world_speedTick(DWORD now);                    // everybody on the same speed: it applies, else x1
+float world_debugSpeedWish();                       // test: the speed we asked for
 void world_debugShift();
 
 // Towns.cpp: world states (unique NPCs dead / jailed) and town changes from the host

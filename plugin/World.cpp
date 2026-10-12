@@ -140,8 +140,10 @@ namespace
 // Host: the clock goes out at the next tick (a player just joined / reloaded its world).
 void world_sendNow() { g_lastSync = 0; }
 
+static void speedReset();
 void world_reset()
 {
+    speedReset();
     g_hostPaused = false;   // a new session starts from the host's next announcement
 }
 
@@ -170,6 +172,71 @@ void world_tick(DWORD now)
             g_lastPauseNotice = now;
             showMessage(T("Pause is controlled by the host in multiplayer."));
         }
+    }
+}
+
+// --------------------------------------------------------------------------- game speed
+// Everybody simulates the same world, so the speed is common: each player chooses with the game's own buttons, and
+// it applies only when ALL players chose the same one (x1 as long as they disagree). A player's choice is what the
+// speed was set to by hand: when the game's speed differs from what we applied, the player changed it.
+namespace
+{
+    std::map<uint8_t, float> g_wishes;     // other players' chosen speeds
+    float g_myWish = 1.f, g_applied = 1.f;
+    DWORD g_lastWishSent = 0, g_lastSpeedNotice = 0;
+    const DWORD WISH_PERIOD_MS = 3000;
+
+    float safeSpeedNow() { __try { return ou->getFrameSpeedMultiplier(); } __except (EXCEPTION_EXECUTE_HANDLER) { return 1.f; } }
+    void safeSetSpeed(float v) { __try { ou->setGameSpeed(v, false); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
+    float clampSpeed(float v) { return !(v == v) ? 1.f : (v < 1.f ? 1.f : (v > 4.f ? 4.f : v)); }
+    void sendWish()
+    {
+        ByteWriter w; w.f32(g_myWish);
+        g_session.send(MSG_SPEED, w.data);
+        g_lastWishSent = GetTickCount();
+    }
+}
+
+float world_debugSpeedWish() { return g_myWish; }
+static void speedReset() { g_wishes.clear(); g_myWish = g_applied = 1.f; }
+
+void world_onSpeed(const NetEvent& e)
+{
+    ByteReader r(e.body);
+    float v = r.f32();
+    if (!r.ok() || e.sender == g_session.localId()) return;
+    g_wishes[e.sender] = clampSpeed(v);
+}
+
+void world_onPlayerLeft(uint8_t id) { g_wishes.erase(id); }
+
+void world_speedTick(DWORD now)
+{
+    float cur = safeSpeedNow();
+    if (fabsf(cur - g_applied) > 0.01f)   // the player used the speed buttons (or a load reset it)
+    {
+        g_myWish = clampSpeed(cur);
+        sendWish();
+    }
+    else if (now - g_lastWishSent >= WISH_PERIOD_MS) sendWish();   // newcomers learn it too
+
+    // Common speed: ours if every other player chose it too.
+    float eff = g_myWish;
+    std::string waiting;
+    std::vector<PlayerInfo> ps = g_session.players();
+    for (size_t i = 0; i < ps.size(); ++i)
+    {
+        if (ps[i].id == g_session.localId()) continue;
+        std::map<uint8_t, float>::iterator w = g_wishes.find(ps[i].id);
+        float theirs = w == g_wishes.end() ? 1.f : w->second;
+        if (fabsf(theirs - g_myWish) > 0.01f) { eff = 1.f; if (!waiting.empty()) waiting += ", "; waiting += ps[i].name; }
+    }
+    if (fabsf(eff - cur) > 0.01f) safeSetSpeed(eff);
+    g_applied = eff;
+    if (eff < g_myWish - 0.01f && now - g_lastSpeedNotice > 15000)
+    {
+        g_lastSpeedNotice = now;
+        showMessage(TF("Speed x%.0f needs everybody on it (waiting for: %s).", g_myWish, waiting.c_str()));
     }
 }
 

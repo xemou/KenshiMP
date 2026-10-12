@@ -196,6 +196,7 @@ namespace
             else if (k == "autotest_load") g_cfg.autotestLoad = v;
             else if (k == "autotest") g_cfg.autotest = toBool(v);
         else if (k == "autotest_goto_shop") g_cfg.autotestGotoShop = toBool(v);
+        else if (k == "autotest_carry") g_cfg.autotestCarry = toBool(v);
             else if (k == "lobby_key")
             {
                 // F1..F12
@@ -431,6 +432,9 @@ namespace
         case MSG_WORLD_BUILDING_REPORT:
             builds_onMessage(e);
             break;
+        case MSG_SPEED:
+            world_onSpeed(e);
+            break;
         case MSG_WORLD_SYNC:
             world_onMessage(e);
             break;
@@ -495,6 +499,7 @@ namespace
     void onPlayerLeft(uint8_t id)
     {
         chars_onPlayerLeft(id);
+        world_onPlayerLeft(id);
         builds_onPlayerLeft(id);
         npcs_onPlayerLeft(id);
         items_onPlayerLeft(id);
@@ -662,6 +667,30 @@ namespace
         chars_localCharacters(locals);
         Character* me = locals.empty() ? NULL : locals[0].second;
         if (!me) return;
+        // autotest_carry=1: its own short script (other players' knocked-out characters carried, ours carried).
+        if (g_cfg.autotestCarry)
+        {
+            // Game speed vote: alone, x3 does not apply; once the other player chose x3 as well (bot, KMP_TEST_SPEED), it does.
+            static int vs = 0;
+            if (vs == 0 && s >= 8)  { vs = 1; ou->setGameSpeed(3.0f, false); log("autotest: speed x3 asked"); }
+            if (vs == 1 && s >= 13) { vs = 2; log("autotest: speed while the other player does not agree -> x%.1f", ou->getFrameSpeedMultiplier()); }
+            if (vs == 2 && s >= 26) { vs = 3; log("autotest: speed once the other player agrees -> x%.1f", ou->getFrameSpeedMultiplier()); }
+            if (vs == 3 && s >= 28) { vs = 4; ou->setGameSpeed(1.0f, false); log("autotest: speed back to x1"); }
+            static int cs = 0;
+            if (cs == 0 && s >= 35) { cs = 1; log("autotest: carry -> %s", chars_debugCarryGhost(me).c_str()); }
+            if (cs == 1 && s >= 48) { cs = 2; log("autotest: carry state -> %s", chars_debugCarryState().c_str()); }
+            if (cs == 2 && s >= 55) { cs = 3; log("autotest: carry state later -> %s", chars_debugCarryState().c_str()); }
+            if (cs == 3 && s >= 62) { cs = 4; log("autotest: knocked out self -> %s", chars_debugKnockOutSelf(me, 18.f).c_str()); }
+            if (cs == 4 && s >= 68) { cs = 5; log("autotest: held report -> %s", chars_debugHeldReport(me).c_str()); }
+            if (cs == 5 && s >= 74) { cs = 6; log("autotest: held report later -> %s", chars_debugHeldReport(me).c_str()); }
+            if (cs == 6 && s >= 80) { cs = 7; log("autotest: held report at the end -> %s", chars_debugHeldReport(me).c_str()); }
+            // Caged: knocked out again, the bot cages the character (state 3); awake again, the player orders it to pick the lock.
+            if (cs == 7 && s >= 84) { cs = 8; log("autotest: knocked out again -> %s", chars_debugKnockOutSelf(me, 4.f).c_str()); }
+            if (cs == 8 && s >= 92) { cs = 9; log("autotest: caged -> %s", chars_debugHeldReport(me).c_str()); log("autotest: pick lock -> %s", chars_debugPickLock(me).c_str()); }
+            if (cs == 9 && s >= 108) { cs = 10; log("autotest: pick lock again -> %s", chars_debugPickLock(me).c_str()); }
+            if (cs == 10 && s >= 126) { cs = 11; log("autotest: after the lock pick -> %s", chars_debugHeldReport(me).c_str()); log("autotest: carry; done"); }
+            return;
+        }
         static bool crimeDone = false;   // host: our NPCs "saw" the other player's character commit a crime
         if (!crimeDone && s >= 30 && g_session.isHost())
         { crimeDone = true; log("autotest: crime on ghost -> %s", bounties_debugCrimeOnGhost(bounties_debugFaction()).c_str()); }
@@ -843,8 +872,8 @@ namespace
             return;
         }
 
-        // Fast-forward is disabled for now: everybody simulates at x1.
-        if (ou->getFrameSpeedMultiplier() > 1.0f) ou->setGameSpeed(1.0f, false);
+        // Game speed: it changes only when every player chose the same one (x1 otherwise).
+        world_speedTick(GetTickCount());
 
         if (!g_ready) return;
 
