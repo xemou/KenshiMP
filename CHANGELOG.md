@@ -11,6 +11,7 @@ Fixed bugs reported in the Steam reviews:
 
 - Shopkeepers for players other than the host: stock to buy and payment (please report if still wrong)
 - NPC movement is smoother (updates every 50-100 ms instead of 100-500 ms)
+- Empty towns when joining before creating the world: buildings had no furniture, tables, shops or cells
 
 ## [v19] - unreleased, protocol 19
 

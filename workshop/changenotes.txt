@@ -4,6 +4,7 @@ Fixed the bugs you reported:
 
 - Shopkeepers for players other than the host: stock to buy and payment (tell me if it is still wrong)
 - NPCs move more smoothly (faster updates)
+- Empty towns (no furniture, shops or cells) when joining before creating the world
 
 v19 - bug fixes (protocol 19: everybody must update)
 

@@ -894,10 +894,13 @@ void charForBuilding_hook(RootObjectFactory* self, Building* b)
     if (suppressLocalWorld()) return;
     charForBuilding_orig(self, b);
 }
+// populateBuilding also furnishes the building (tables, shop counters, cells...): blocking it left the towns of
+// a client who joined before creating its world completely empty (reviews: "the town was empty, no cells in
+// the tower", no furniture, no shops). It always runs now; the people it creates come through
+// createCharacterForBuilding (blocked above) and the local NPCs that slip through are removed by clientCleanup.
 void (*populate_orig)(RootObjectFactory*, Building*) = NULL;
 void populate_hook(RootObjectFactory* self, Building* b)
 {
-    if (suppressLocalWorld()) return;
     populate_orig(self, b);
 }
 

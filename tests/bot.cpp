@@ -149,14 +149,26 @@ static bool showcase()
 // KMP_TEST_TRADER_SQUAD=<squad template sid> [KMP_TEST_TRADER_AT=x;y;z]: the first NPC spawn that is sent
 // becomes a shopkeeper (protocol 20 trailer: squad template, price multiplier 1.0), standing at x;y;z
 // (a shop building next to the client, from the game's "autotest: shop" log line).
+static uint32_t g_traderId = 0;   // the NPC made a shopkeeper: it stays where it is (no despawn, no movement)
 static Bytes traderSpawn(uint8_t type, const Bytes& body)
 {
     static bool done = false;
+    if (g_traderId && type == MSG_ENTITY_STATE)
+    {
+        // Its states (recorded walking) are dropped, the other NPCs' kept.
+        ByteReader r(body); uint32_t clock = r.u32(); uint16_t n = r.u16();
+        std::vector<EntityState> keep; bool dropped = false;
+        for (uint16_t i = 0; i < n && r.ok(); ++i) { EntityState st; st.read(r); if (!r.ok()) return body; if (st.netId == g_traderId) dropped = true; else keep.push_back(st); }
+        if (!dropped) return body;
+        ByteWriter w; w.u32(clock); w.u16((uint16_t)keep.size());
+        for (size_t i = 0; i < keep.size(); ++i) keep[i].write(w);
+        return w.data;
+    }
     if (done || type != MSG_ENTITY_SPAWN) return body;
     std::string squad; if (!envStr("KMP_TEST_TRADER_SQUAD", squad) || squad.empty()) return body;
     ByteReader r(body); EntitySpawn sp; sp.read(r);
     if (!r.ok()) return body;
-    done = true;
+    done = true; g_traderId = sp.netId;
     std::string at;
     if (envStr("KMP_TEST_TRADER_AT", at))
     {
@@ -195,7 +207,8 @@ static int hostReplay(const char* file, int port, int seconds, const char* mods)
         for (uint16_t k = 0; k < n && r.ok() && sample.size() < 6; ++k) { InvItem d; d.read(r); if (r.ok() && d.sanitize()) sample.push_back(d); }
     }
     // KMP_TEST_BOXITEM=<item sid>: stock for the town containers / shop shelves when the recording has no items.
-    { std::string bi; if (sample.empty() && envStr("KMP_TEST_BOXITEM", bi) && !bi.empty()) { InvItem d; d.item = bi; d.quantity = 5; sample.push_back(d); } }
+    // (several items separated by ';')
+    { std::string bi; if (sample.empty() && envStr("KMP_TEST_BOXITEM", bi) && !bi.empty()) { std::vector<std::string> ids = splitSemi(bi); for (size_t i = 0; i < ids.size(); ++i) if (!ids[i].empty()) { InvItem d; d.item = ids[i]; d.quantity = 5; sample.push_back(d); } } }
     printf("[host] %d item(s) for the town container test\n", (int)sample.size());
     std::map<uint32_t, std::vector<InvItem> > boxes;   // container net id -> what "our" town chest holds
 
@@ -384,6 +397,7 @@ static int hostReplay(const char* file, int port, int seconds, const char* mods)
         if (rstart)
             while (next < recs.size() && GetTickCount() - rstart >= (recs[next].ms > baseMs ? recs[next].ms - baseMs : 0))
             {
+                if (g_traderId && recs[next].type == MSG_ENTITY_DESPAWN && firstId(recs[next].type, recs[next].body) == g_traderId) { ++next; continue; }   // the shopkeeper stays
                 if (shareOn)
                 {
                     uint32_t id = firstId(recs[next].type, recs[next].body);
