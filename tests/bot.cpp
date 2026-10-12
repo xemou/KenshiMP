@@ -180,6 +180,16 @@ static Bytes traderSpawn(uint8_t type, const Bytes& body)
     ByteWriter w; sp.write(w); return w.data;
 }
 
+// The id a client gives a town container (Items.cpp boxId): the same building gets the same id everywhere.
+static uint32_t botBoxId(const std::string& sid, float x, float y, float z)
+{
+    char buf[64];
+    sprintf_s(buf, "@%d,%d,%d", (int)floorf(x + 0.5f), (int)floorf(y + 0.5f), (int)floorf(z + 0.5f));
+    std::string k = sid + buf;
+    uint32_t h = hashBytes(Bytes(k.begin(), k.end())) & 0x7FFFFF;
+    return makeNetId(HOST_ID, h ? h : 1);
+}
+
 static int hostReplay(const char* file, int port, int seconds, const char* mods)
 {
     { char nm[8]; size_t nl = 0; nearMode = getenv_s(&nl, nm, sizeof(nm), "KMP_TEST_NEAR") == 0 && nl > 1; }
@@ -211,6 +221,35 @@ static int hostReplay(const char* file, int port, int seconds, const char* mods)
     { std::string bi; if (sample.empty() && envStr("KMP_TEST_BOXITEM", bi) && !bi.empty()) { std::vector<std::string> ids = splitSemi(bi); for (size_t i = 0; i < ids.size(); ++i) if (!ids[i].empty()) { InvItem d; d.item = ids[i]; d.quantity = 5; sample.push_back(d); } } }
     printf("[host] %d item(s) for the town container test\n", (int)sample.size());
     std::map<uint32_t, std::vector<InvItem> > boxes;   // container net id -> what "our" town chest holds
+    int pauseA = -1, pauseB = -1; bool pauseAnnounced = false;
+    { std::string pv; if (envStr("KMP_TEST_PAUSE", pv)) sscanf_s(pv.c_str(), "%d,%d", &pauseA, &pauseB); }
+    // KMP_TEST_HOSTCHAR="x;y;z": a host player character standing there (template = the first recorded NPC's).
+    bool hostCharOn = false; float hostCharPos[3] = { 0, 0, 0 }; std::string hostCharTemplate;
+    {
+        std::string hc;
+        if (envStr("KMP_TEST_HOSTCHAR", hc))
+        {
+            std::vector<std::string> f = splitSemi(hc);
+            for (size_t i = 0; i < recs.size() && hostCharTemplate.empty(); ++i)
+                if (recs[i].type == MSG_ENTITY_SPAWN) { ByteReader r(recs[i].body); EntitySpawn sp; sp.read(r); if (r.ok()) hostCharTemplate = sp.gameDataName; }
+            if (f.size() >= 3 && !hostCharTemplate.empty())
+            {
+                hostCharOn = true; hostCharPos[0] = (float)atof(f[0].c_str()); hostCharPos[1] = (float)atof(f[1].c_str()); hostCharPos[2] = (float)atof(f[2].c_str());
+                printf("[host] a host character stands at (%.0f, %.0f, %.0f) (template %s)\n", hostCharPos[0], hostCharPos[1], hostCharPos[2], hostCharTemplate.c_str());
+            }
+        }
+    }
+    // Shop shelves / chests recorded from a real host (KMP_TEST_OPENBOX): served when the client opens them.
+    std::map<uint32_t, std::vector<InvItem> > boxRecorded;
+    for (size_t i = 0; i < recs.size(); ++i)
+    {
+        if (recs[i].type != MSG_INVENTORY || recs[i].body.empty() || recs[i].body[0] != CONTAINER_WORLD) continue;
+        ByteReader r(recs[i].body); r.u8(); uint32_t id = r.u32(); uint16_t n = r.u16();
+        std::vector<InvItem> items;
+        for (uint16_t k = 0; k < n && r.ok(); ++k) { InvItem d; d.read(r); if (r.ok() && d.sanitize()) items.push_back(d); }
+        if (r.ok()) boxRecorded[id] = items;
+    }
+    printf("[host] %d recorded town container(s)\n", (int)boxRecorded.size());
 
     Session s; std::string err;
     s.setModList(mods, true);
@@ -279,7 +318,7 @@ static int hostReplay(const char* file, int port, int seconds, const char* mods)
                 if (!r.ok()) continue;
                 printf("[host] TOWN CONTAINER %s %s (%08x) at (%.0f, %.0f, %.0f)\n", sid.c_str(), open ? "opened" : "closed", id, x, y, z);
                 if (!open) continue;
-                if (!boxes.count(id)) boxes[id] = sample;
+                if (!boxes.count(id)) boxes[id] = boxRecorded.count(id) ? boxRecorded[id] : sample;
                 ByteWriter w; w.u8(CONTAINER_WORLD); w.u32(id); w.u16((uint16_t)boxes[id].size());
                 for (size_t k = 0; k < boxes[id].size(); ++k) boxes[id][k].write(w);
                 s.sendTo(e.sender, MSG_INVENTORY, w.data);
@@ -321,6 +360,36 @@ static int hostReplay(const char* file, int port, int seconds, const char* mods)
                 ByteWriter w; w.u8(joined); w.u8((uint8_t)mode);
                 s.sendTo(joined, MSG_ZONE_MODE, w.data);
                 printf("[host] zone mode for player %d: %s\n", (int)joined, mode ? "shared" : "on its own");
+            }
+        }
+        // KMP_TEST_CHAT=1: the host says something 20 s after the client joined.
+        {
+            static bool chatSent = false; std::string cv;
+            if (start && !chatSent && GetTickCount() - start >= 20000 && envStr("KMP_TEST_CHAT", cv))
+            {
+                chatSent = true;
+                ByteWriter w; w.str("Hello from the host (bot chat test)"); s.send(MSG_CHAT, w.data);
+                printf("[host] chat sent\n");
+            }
+        }
+        // KMP_TEST_HOSTCHAR="x;y;z": the host is a real player with a character standing there (GO TO in the
+        // multiplayer window brings the client's squad next to it), announced every 3 s like the plugin does.
+        if (start && hostCharOn)
+        {
+            static DWORD lastChar = 0, lastCharSpawn = 0;
+            DWORD nowc = GetTickCount();
+            if (nowc - lastCharSpawn >= 3000)
+            {
+                lastCharSpawn = nowc;
+                EntitySpawn sp; sp.netId = makeNetId(HOST_ID, 1); sp.kind = KIND_CHARACTER; sp.gameDataName = hostCharTemplate;
+                sp.displayName = "ReplayHost"; sp.x = hostCharPos[0]; sp.y = hostCharPos[1]; sp.z = hostCharPos[2];
+                ByteWriter w; sp.write(w); s.send(MSG_ENTITY_SPAWN, w.data);
+            }
+            if (nowc - lastChar >= 100)
+            {
+                lastChar = nowc;
+                EntityState st; st.netId = makeNetId(HOST_ID, 1); st.x = st.tx = hostCharPos[0]; st.y = st.ty = hostCharPos[1]; st.z = st.tz = hostCharPos[2];
+                ByteWriter w; w.u32(nowc); w.u16(1); st.write(w); s.send(MSG_ENTITY_STATE, w.data);
             }
         }
         // Load sharing by distance, like the host plugin (Npcs.cpp updateClientMode + hostScan).
@@ -397,12 +466,21 @@ static int hostReplay(const char* file, int port, int seconds, const char* mods)
         if (rstart)
             while (next < recs.size() && GetTickCount() - rstart >= (recs[next].ms > baseMs ? recs[next].ms - baseMs : 0))
             {
+                if (recs[next].type == MSG_INVENTORY && !recs[next].body.empty() && recs[next].body[0] == CONTAINER_WORLD) { ++next; continue; }   // served on demand
                 if (g_traderId && recs[next].type == MSG_ENTITY_DESPAWN && firstId(recs[next].type, recs[next].body) == g_traderId) { ++next; continue; }   // the shopkeeper stays
                 if (shareOn)
                 {
                     uint32_t id = firstId(recs[next].type, recs[next].body);
                     if (recs[next].type == MSG_ENTITY_SPAWN && id) live.insert(id);
                     else if (recs[next].type == MSG_ENTITY_DESPAWN) live.erase(id);
+                }
+                if (recs[next].type == MSG_WORLD_SYNC && recs[next].body.size() >= 12 && pauseA >= 0)
+                {
+                    // KMP_TEST_PAUSE=a,b: the host's game is paused from a to b seconds after the client joined.
+                    int since = (int)((GetTickCount() - start) / 1000);
+                    Bytes b = recs[next].body;
+                    if (since >= pauseA && since < pauseB) { b[8] |= 1; if (!pauseAnnounced) { pauseAnnounced = true; printf("[host] pause announced\n"); } }
+                    s.send(recs[next].type, b); ++next; continue;
                 }
                 if (nearMode && haveClient) { s.send(recs[next].type, traderSpawn(recs[next].type, moveNear(recs[next].type, recs[next].body))); ++next; continue; }
                 if (nearMode && !haveClient) break;   // wait until we know where the client is
@@ -646,6 +724,20 @@ int main(int argc, char** argv)
                 DWORD ms = GetTickCount() - t0; uint32_t len = (uint32_t)e.body.size();
                 fwrite(&ms, 4, 1, record); fwrite(&e.msgType, 1, 1, record); fwrite(&len, 4, 1, record);
                 if (len) fwrite(&e.body[0], 1, len, record);
+            }
+            // The host's town containers (shop shelves...) the bot asked for: recorded too, a replay host serves them.
+            if (e.kind == NetEvent::EV_MESSAGE && e.msgType == MSG_INVENTORY && !e.body.empty() && e.body[0] == CONTAINER_WORLD)
+            {
+                ByteReader rc(e.body); rc.u8(); uint32_t cid = rc.u32(); uint16_t cn = rc.u16();
+                static std::map<uint32_t, uint32_t> lastHash; uint32_t hh = hashBytes(e.body);
+                if (!lastHash.count(cid) || lastHash[cid] != hh) { lastHash[cid] = hh; printf("[bot] town container %08x: %d stack(s) recorded\n", cid, (int)cn); }
+                if (record && (!lastHash.count(cid) || true))
+                {
+                    DWORD ms = GetTickCount() - t0; uint32_t len = (uint32_t)e.body.size();
+                    fwrite(&ms, 4, 1, record); fwrite(&e.msgType, 1, 1, record); fwrite(&len, 4, 1, record);
+                    if (len) fwrite(&e.body[0], 1, len, record);
+                }
+                continue;
             }
             // World NPC traffic: count / record it, never mirror it back.
             uint32_t fid = firstId(e.msgType, e.body);
@@ -1182,6 +1274,31 @@ int main(int argc, char** argv)
             script = 5;
             ByteWriter w; w.u8(HOST_ID); w.f32(0.f); s.send(MSG_FACTION_RELATION, w.data);
             printf("[bot] script: peace made\n");
+        }
+        // KMP_TEST_OPENBOX="sid;x;y;z|sid;x;y;z": opens those town containers (shop shelves) on the host every 15 s,
+        // like a player standing next to them, so their real content is recorded (see above).
+        {
+            static DWORD lastOpen = 0;
+            std::string ob;
+            if (connectedAt && now - lastOpen >= 15000 && envStr("KMP_TEST_OPENBOX", ob))
+            {
+                lastOpen = now;
+                size_t a = 0;
+                while (a <= ob.size())
+                {
+                    size_t b = ob.find('|', a);
+                    std::vector<std::string> f = splitSemi(ob.substr(a, b == std::string::npos ? std::string::npos : b - a));
+                    if (f.size() >= 4 && !f[0].empty())
+                    {
+                        float x = (float)atof(f[1].c_str()), y = (float)atof(f[2].c_str()), z = (float)atof(f[3].c_str());
+                        uint32_t id = botBoxId(f[0], x, y, z);
+                        ByteWriter w; w.u8(HOST_ID); w.u8(1); w.u32(id); w.str(f[0]); w.f32(x); w.f32(y); w.f32(z);
+                        s.send(MSG_WORLD_CONTAINER, w.data);
+                    }
+                    if (b == std::string::npos) break;
+                    a = b + 1;
+                }
+            }
         }
         // Town tests (game = host). In the host's world (before KMP_TEST_FAR): heavy hits on the town
         // door from 20 s, once a second, until the host reports it broken. Far away (our own world):

@@ -5,3 +5,9 @@ out/
 *.ilk
 dist/
 
+
+tests/harness/out/
+tests/harness/bg_backup/
+tests/harness/crashes/
+tests/harness/*.txt
+tests/harness/*.png

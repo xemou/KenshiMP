@@ -760,7 +760,9 @@ namespace
         std::deque<Ogre::Vector3> trail;  // where the owner actually went (walkable waypoints)
         double lastFrameP, lastMoveAt;  // precise clock: previous frame, last time the body moved
         Ogre::Vector3 prevFrameBody;    // body position last frame (its real speed)
-        DWORD settleUntil;              // after a teleport: no snap/unblock checks until then
+        Ogre::Vector3 prevTarget, measVel;   // target position last frame, and the velocity it implies (smoothed)
+        bool hasPrevTarget;
+        DWORD settleUntil;             // after a teleport: no snap/unblock checks until then
         DWORD lastSpeedCmd;             // speed matching: last command
         float speedCmd, baseMaxSpeed;   // value sent; the body's own max (restored when slow)
         double freezeMs;                // current streak: owner moving, body not
@@ -773,7 +775,7 @@ namespace
                   combatTarget(NULL), mirroredTask(-1), lastSpeed(-1), mode(MOVE), intervalMs(100),
                   lastSnapT(0), lastMoveCmd(0), lastFrame(0), hasVisual(false), visualPos(Ogre::Vector3::ZERO),
                   visualRot(Ogre::Quaternion::IDENTITY), blend(0), lastDrawn(Ogre::Vector3::ZERO),
-                  stuckSince(0), stuckTarget(Ogre::Vector3::ZERO), lastBody(Ogre::Vector3::ZERO), freezeMs(0), lastDest(Ogre::Vector3::ZERO), hasDest(false),
+                  stuckSince(0), stuckTarget(Ogre::Vector3::ZERO), lastBody(Ogre::Vector3::ZERO), freezeMs(0), lastDest(Ogre::Vector3::ZERO), hasDest(false), prevTarget(Ogre::Vector3::ZERO), measVel(Ogre::Vector3::ZERO), hasPrevTarget(false),
                   lastFrameP(0), lastMoveAt(0), prevFrameBody(Ogre::Vector3::ZERO), settleUntil(0), lastSpeedCmd(0), speedCmd(0), baseMaxSpeed(0) {}
     };
     std::map<uint8_t, ClockSync> g_clocks;   // per remote player: its clock -> ours
@@ -1375,6 +1377,21 @@ namespace
                 g.follow.update(smp, frameMs, 2.5f + sp * 0.5f, 6.f + sp * 0.15f);
             }
             Ogre::Vector3 target(g.follow.x, g.follow.y, g.follow.z);
+            // The owner's reported velocity can be missing (a stale or sparse sample reads 0 while the
+            // body clearly moves): then the speed is what the target itself does, so the engine still
+            // gets move orders and walks the ghost with its animation instead of it being placed.
+            {
+                if (g.hasPrevTarget && frameMs > 1.0)
+                {
+                    float fs = (float)(frameMs / 1000.0);
+                    Ogre::Vector3 mv((target.x - g.prevTarget.x) / fs, 0, (target.z - g.prevTarget.z) / fs);
+                    if (mv.length() > 120.f) mv = Ogre::Vector3::ZERO;   // a jump, not a walk
+                    g.measVel = g.measVel * 0.85f + mv * 0.15f;
+                }
+                g.prevTarget = target; g.hasPrevTarget = true;
+                float rep = sqrtf(smp.vx * smp.vx + smp.vz * smp.vz);
+                if (rep < 0.5f && g.measVel.length() > 2.f) { smp.vx = g.measVel.x; smp.vz = g.measVel.z; }
+            }
             g.hasVisual = true;
             g.visualPos = target;
             g.visualRot = Ogre::Quaternion(smp.qw, smp.qx, smp.qy, smp.qz);
@@ -1460,14 +1477,15 @@ namespace
                 }
             }
             else g.stuckSince = 0;
-            static DWORD lastDiag = 0;
-            if (g_cfg.debugKeys && now - lastDiag > 3000 && !isNpcNetId(it->first))
+            static DWORD lastDiag = 0, lastNpcDiag = 0;
+            bool npcGhost = isNpcNetId(it->first);
+            if (g_cfg.debugKeys && now - (npcGhost ? lastNpcDiag : lastDiag) > 1500 && (!npcGhost || dist > 12.f))   // players, and host NPCs that lag
             {
-                lastDiag = now;
+                (npcGhost ? lastNpcDiag : lastDiag) = now;
                 SpeedInfo si;
                 if (safeSpeedInfo(c, &si))
-                    log("drive %08x: target speed %.1f, offset %.2f | engine current %.1f max %.1f orders %d running %d pathOk %d pathFailed %d | owner flags %d delay %.0f ms",
-                        it->first, speed, dist, si.current, si.max, si.orders, (int)si.running, (int)si.pathOk, (int)si.pathFailed, (int)g.last.flags, delay);
+                    log("drive %08x%s: target speed %.1f, offset %.2f | engine current %.1f max %.1f orders %d running %d pathOk %d pathFailed %d | owner flags %d delay %.0f ms, mode %d, indoors %d",
+                        it->first, isNpcNetId(it->first) ? " (NPC)" : "", speed, dist, si.current, si.max, si.orders, (int)si.running, (int)si.pathOk, (int)si.pathFailed, (int)g.last.flags, delay, (int)g.mode, c->isIndoors().getBuilding() ? 1 : 0);
             }
             // Blocked while its owner moves (wedged on a corner): stop pushing in a straight line and
             // walk to the owner's exact spot. Only a long, real stall (engine stopped or no path)
@@ -1821,7 +1839,13 @@ std::string chars_debugShoot(Character* me)
         if (!isNpcNetId(it->first)) target = it->second.h.getCharacter();
     if (!target) return "no ghost to aim at";
     GunClass* g = safeGunOf(me);
-    if (!g) return "no ranged weapon";
+    if (!g)
+    {
+        int bow = -1, mode = -1, inRanged = -1, wants = -1;
+        safeRangedInfo(me, &bow, &mode, &inRanged, &wants);
+        char buf[160]; sprintf_s(buf, "no ranged weapon (getRangedWeapon=%d, ranged mode=%d, in ranged combat=%d, wants ranged=%d)", bow, mode, inRanged, wants);
+        return buf;
+    }
     Ogre::Vector3 aim = target->getPosition() + Ogre::Vector3(0, 15, 0);
     return safeShoot(g, me, target, 0, &aim) ? "shot fired at " + target->getName() : "the engine refused the shot";
 }

@@ -51,3 +51,6 @@ Unofficial fan project, not affiliated with Lo-Fi Games. Free software under the
 Source code, full guide and issue tracker: [url=https://github.com/xemou/KenshiMP]github.com/xemou/KenshiMP[/url]
 
 Please report bugs on GitHub: type /report in the chat (or BUG REPORT in the Multiplayer window), zip the folder it creates on your desktop and attach it.
+
+[h2]Support the project (optional)[/h2]
+KenshiMP is and will stay free. If you enjoy it and want to support its development, you can make a donation: [url=https://paypal.me/XemTECH]paypal.me/XemTECH[/url]. Thank you!

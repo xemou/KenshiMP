@@ -5,12 +5,13 @@ Workshop update must be announced here and in the Workshop "Change Notes".
 Format: one section per Workshop release, newest first. The protocol number is `PROTOCOL_VERSION`
 in `core/Protocol.h`.
 
-## [v20] - unreleased, protocol 20
+## [v20] - ready to publish, protocol 20
 
 Fixed bugs reported in the Steam reviews:
 
 - Shopkeepers for players other than the host: stock to buy and payment (please report if still wrong)
-- NPC movement is smoother (updates every 50-100 ms instead of 100-500 ms)
+- NPC movement is smoother (updates every 50-100 ms instead of 100-500 ms), walking with animation instead of jumping
+- Shop shelves and town chests are the same for everybody
 - Empty towns when joining before creating the world: buildings had no furniture, tables, shops or cells
 
 ## [v19] - unreleased, protocol 19

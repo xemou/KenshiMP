@@ -210,6 +210,19 @@ namespace
         }
         if (!shown) log("   [%s] no building holding items within 80 units (%d building(s) checked)", when, (int)around.size());
     }
+    // Test runs: is c inside a building (the shop it works in...)? 1 + the building's id, 0 outdoors, -1 unknown.
+    int safeIndoors(Character* c, char* sid, int sidLen)
+    {
+        __try
+        {
+            sid[0] = 0;
+            Building* b = c->isIndoors().getBuilding();
+            if (!b) return 0;
+            if (b->data) strncpy_s(sid, sidLen, b->data->stringID.c_str(), _TRUNCATE);
+            return 1;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+    }
     bool g_probedRestock = false;
     bool safeRestock(Character* c, int* itemsAfter, int* vendorList, int* specialList)
     {
@@ -238,6 +251,9 @@ namespace
         {
             char names[400]; int n = 0;
             if (safeSectionNames(c, names, sizeof(names), &n)) log("   inventory sections (%d): %s", n, names);
+            char in[120]; int indoors = safeIndoors(c, in, sizeof(in));
+            log("   position (%.0f, %.0f, %.0f), %s%s%s", c->getPosition().x, c->getPosition().y, c->getPosition().z,
+                indoors == 1 ? "INDOORS in " : (indoors == 0 ? "outdoors" : "indoors unknown"), indoors == 1 ? in : "", "");
         }
         // Where is its stock? Buildings around it that hold items (shop counter, storage...).
         logStockBuildings(c, "before restock");
@@ -720,6 +736,17 @@ std::string npcs_debugCensus()
             logTrader(*it, 0);
             if (probed.size() >= 6) break;
         }
+    }
+    // How many of the NPCs around us are inside a building (shopkeepers, barmen, residents)?
+    {
+        std::set<Character*> around; collectAround(mine, 400.f, around);
+        int indoors = 0, outdoors = 0;
+        for (std::set<Character*>::iterator it = around.begin(); it != around.end(); ++it)
+        {
+            char in[8];
+            if (safeIndoors(*it, in, sizeof(in)) == 1) ++indoors; else ++outdoors;
+        }
+        log("NPCs within 400 units that the engine updates: %d indoors, %d outdoors", indoors, outdoors);
     }
     const char* mode = g_session.isHost() ? "host" : (!g_session.active() ? "not connected" : (g_zoneMode == MODE_SHARED ? "shared world" : (g_zoneMode == MODE_APART ? "own world" : "mode unknown")));
     char buf[400];

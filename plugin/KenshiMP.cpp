@@ -700,7 +700,12 @@ namespace
         if (step == 86 && s >= 107) { step = 87; lobby_toggle(); log("autotest: lobby window closing"); }
         if (step == 87 && s >= 110) { step = 88; log("autotest: shop trade opened (test) -> %s", items_debugShopTrade().c_str()); }
         if (step == 88 && s >= 113) { step = 89; log("autotest: shop buy -> %s", items_debugBuyFromShelf(me).c_str()); }
-        if (step == 89 && s >= 118) { step = -1; chars_logHitStats(); log("autotest: lobby open after close -> %d; done", (int)lobby_isOpen()); }
+        // Speed lock: fast-forward is refused while connected (everybody simulates at x1).
+        if (step == 89 && s >= 118) { step = 90; ou->setGameSpeed(3.0f, false); log("autotest: game speed set to x3"); }
+        if (step == 90 && s >= 121) { step = 91; log("autotest: speed lock -> game speed is x%.1f (was set to x3)", ou->getFrameSpeedMultiplier()); }
+        // Client only: GO TO the host's character (what the multiplayer window's GO TO button does).
+        if (step == 91 && s >= 123) { step = 92; log("autotest: goto -> %s", g_session.isHost() ? "skipped (host)" : chars_regroupTo(other).c_str()); }
+        if (step == 92 && s >= 150) { step = -1; chars_logHitStats(); log("autotest: lobby open after close -> %d; done", (int)lobby_isOpen()); }
     }
 
     bool gameFocused()
@@ -816,6 +821,7 @@ namespace
                 lastCensus = GetTickCount();
                 std::string c = npcs_debugCensus();
                 if (!c.empty()) log("%s", c.c_str());
+                log("census: paused=%d, game speed x%.1f", (int)ou->isPaused(), ou->getFrameSpeedMultiplier());
                 std::vector<std::string> b = builds_debugCensus(250.f);
                 for (size_t i = 0; i < b.size(); ++i) log("%s", b[i].c_str());
             }
