@@ -123,6 +123,7 @@ Character* chars_nextGhost(Character* after);
 std::string chars_debugShoot(Character* me);   // test: our character fires at a ghost   // cycles through the ghosts (debug camera)
 void chars_localCharacters(std::vector<std::pair<uint32_t, Character*> >& out);   // our replicated squad
 void chars_npcGhostsNear(const std::vector<Ogre::Vector3>& centres, float radius, std::vector<uint32_t>& out);   // host NPC ghosts within radius of a centre
+void chars_traderPositions(std::vector<Ogre::Vector3>& out);   // the host shopkeepers' ghosts we see (their shop shelves are mirrored)
 void chars_playerGhosts(std::vector<std::pair<uint32_t, Character*> >& out);      // other players' characters here
 bool chars_playerPosition(uint8_t owner, Ogre::Vector3& out);   // last known position of one of its characters
 std::string chars_regroupTo(uint8_t owner);   // move our selected characters next to that player's (text to show)
@@ -168,6 +169,8 @@ int items_moneyOf(Character* c);
 Inventory* items_backpackOf(Character* c);                 // worn backpack's own inventory, NULL if none
 mp::Bytes items_backpackMsg(uint32_t id, Character* c);    // MSG_INVENTORY body of it, empty if none   // squad money (NPC traders), -1 if unknown
 std::string items_debugLoot(Character* taker);
+std::string items_debugShopTrade();                  // test: pretend a trade with a shopkeeper is open for a few seconds
+std::string items_debugBuyFromShelf(Character* taker); // test: the first item of a mirrored shop shelf moves to taker
 std::string items_debugBackpack(Character* taker);
 std::string items_debugGiveOne(Character* c);      // test: one item in c's inventory
 std::string items_debugEquipCrossbow(Character* c); // test: a crossbow in c's hands

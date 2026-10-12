@@ -1699,6 +1699,16 @@ void chars_npcGhostsNear(const std::vector<Ogre::Vector3>& centres, float radius
     }
 }
 
+void chars_traderPositions(std::vector<Ogre::Vector3>& out)
+{
+    for (std::map<uint32_t, Platoon*>::iterator it = g_traderSquads.begin(); it != g_traderSquads.end(); ++it)
+    {
+        std::map<uint32_t, Ghost>::iterator g = g_ghosts.find(it->first);
+        if (g == g_ghosts.end()) continue;
+        if (Character* c = g->second.h.getCharacter()) out.push_back(c->getPosition());
+    }
+}
+
 void chars_playerGhosts(std::vector<std::pair<uint32_t, Character*> >& out)
 {
     for (std::map<uint32_t, Ghost>::iterator it = g_ghosts.begin(); it != g_ghosts.end(); ++it)

@@ -698,7 +698,9 @@ namespace
         if (step == 84 && s >= 82) { step = 85; log("autotest: Advanced settings pressed -> %d", (int)lobby_pressTitleButton("KMP_Advanced")); }
         if (step == 85 && s >= 102) { step = 86; log("autotest: Advanced settings pressed again -> %d", (int)lobby_pressTitleButton("KMP_Advanced")); }
         if (step == 86 && s >= 107) { step = 87; lobby_toggle(); log("autotest: lobby window closing"); }
-        if (step == 87 && s >= 110) { step = -1; chars_logHitStats(); log("autotest: lobby open after close -> %d; done", (int)lobby_isOpen()); }
+        if (step == 87 && s >= 110) { step = 88; log("autotest: shop trade opened (test) -> %s", items_debugShopTrade().c_str()); }
+        if (step == 88 && s >= 113) { step = 89; log("autotest: shop buy -> %s", items_debugBuyFromShelf(me).c_str()); }
+        if (step == 89 && s >= 118) { step = -1; chars_logHitStats(); log("autotest: lobby open after close -> %d; done", (int)lobby_isOpen()); }
     }
 
     bool gameFocused()

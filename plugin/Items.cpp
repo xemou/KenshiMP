@@ -182,7 +182,8 @@ namespace
         std::set<uint8_t> watchers;       // host: clients with its window open
         uint32_t sentHash;                // host: content last sent to them
         bool open;                        // client: its window is open on our screen
-        WorldBox() : x(0), y(0), z(0), sentHash(0), open(false) {}
+        bool shelf;                       // client: a shop's shelves (always mirrored; transfers only while a trade is open)
+        WorldBox() : x(0), y(0), z(0), sentHash(0), open(false), shelf(false) {}
     };
     std::map<uint32_t, WorldBox> g_boxes;
     const size_t MAX_BOXES = 2048;
@@ -513,6 +514,22 @@ namespace
     // at all (hundreds of host NPCs on a client): when a window opens, its content at that moment
     // becomes the reference, so changes made while it was closed are never taken for transfers.
     std::set<uint64_t> g_open;   // containers whose window was open at the last check
+
+    // A shop's shelves have no window of their own: what moves in or out of them counts as a purchase / a sale
+    // only while a trade with a shopkeeper is open (otherwise it is the engine restocking, or our own mirror).
+    DWORD g_testTradeUntil = 0;   // test runs: pretend a trade is open until then
+    bool safeTradeOpen()
+    {
+        if (GetTickCount() < g_testTradeUntil) return true;
+        __try { return InventoryGUI::getNPCTrader() != NULL; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    bool isShelf(uint8_t kind, uint32_t id)
+    {
+        if (kind != CONTAINER_WORLD) return false;
+        std::map<uint32_t, WorldBox>::iterator b = g_boxes.find(id);
+        return b != g_boxes.end() && b->second.shelf;
+    }
     void detectTransfers()
     {
         // Our own changes (mirror, re-dress) re-take their container's reference right away
@@ -527,7 +544,7 @@ namespace
             bool npc = kind == CONTAINER_CHARACTER && isNpcNetId(id);
             Inventory* inv = inventoryOf(kind, id);
             if (!inv) { g_open.erase(it->first); g_moneyBase.erase(it->first); g_baseline.erase(it++); continue; }   // despawned (a new mirror re-creates it)
-            bool visible = safeVisible(inv);
+            bool visible = safeVisible(inv) || (isShelf(kind, id) && safeTradeOpen());
             if (kind == CONTAINER_BACKPACK && !visible)   // shown beside its wearer's inventory
                 if (Inventory* wearer = inventoryOf(CONTAINER_CHARACTER, id)) visible = safeVisible(wearer);
             bool wasOpen = g_open.count(it->first) != 0;
@@ -803,17 +820,45 @@ namespace
         g_session.sendTo(HOST_ID, MSG_WORLD_CONTAINER, m.data);
     }
 
-    // Client: which town container windows are open on our screen (opened / closed since last time).
+    // Client: register one of the host's town containers as open (its content is asked for and mirrored).
+    void openBox(Building* b, Inventory* inv, bool shelf, std::set<uint32_t>& openNow)
+    {
+        Ogre::Vector3 at;
+        if (!safeBoxPosition(b, &at)) return;
+        std::string sid = b->data->stringID;
+        uint32_t id = boxId(sid, at);
+        openNow.insert(id);
+        if (!g_boxes.count(id) && g_boxes.size() >= MAX_BOXES) return;
+        WorldBox& w = g_boxes[id];
+        if (shelf) w.shelf = true;
+        if (w.open) return;
+        w.sid = sid; w.x = at.x; w.y = at.y; w.z = at.z; w.h = hand(b); w.open = true;
+        // Our copy (from our save) is not the town's: emptied until the host's content
+        // arrives, and not taken for a transfer of the player (no reference until then).
+        uint64_t k2 = key(CONTAINER_WORLD, id);
+        g_baseline.erase(k2); g_open.erase(k2); g_appliedHash.erase(k2);
+        Pending blank; blank.kind = CONTAINER_WORLD; blank.id = id; blank.since = GetTickCount();
+        applyMirror(blank);
+        sendBoxEvent(id, w, true);
+        log("town container %s opened%s: asking the host for its content (%08x)", sid.c_str(), shelf ? " (shop shelves)" : "", id);
+    }
+
+    // Client: which town containers are open on our screen (opened / closed since last time), and the shelves of
+    // every shop around our characters and around the shopkeepers we see (always mirrored: the stock lives there).
+    const float SHOP_SCAN_RADIUS = 80.f;
     void scanBoxes()
     {
         std::vector<std::pair<uint32_t, Character*> > mine;
         chars_localCharacters(mine);
         std::set<uint32_t> openNow;
         std::vector<Ogre::Vector3> done;
+        std::vector<Ogre::Vector3> shopCentres;
+        chars_traderPositions(shopCentres);   // the shopkeepers' ghosts
         for (size_t i = 0; i < mine.size(); ++i)
         {
             if (!mine[i].second) continue;
             Ogre::Vector3 p = mine[i].second->getPosition();
+            shopCentres.push_back(p);
             bool covered = false;   // (not "near": a Windows macro)
             for (size_t k = 0; k < done.size() && !covered; ++k) covered = done[k].squaredDistance(p) < 20.f * 20.f;
             if (covered) continue;
@@ -824,32 +869,24 @@ namespace
             {
                 Building* b = static_cast<Building*>(list[k]);
                 Inventory* inv = worldInventory(b);
-                if ((g_cfg.autotest || g_cfg.debugKeys) && safeIsShop(b))
-                {
-                    static int shown = 0;
-                    if (shown < 6) { ++shown; log("shop building %s within %.0f units of us: %s", b->data ? b->data->stringID.c_str() : "?", BOX_SCAN_RADIUS,
-                        inv ? "shared container" : (builds_netIdOf(b) ? "built by a player (own container)" : "no inventory / owned by our faction")); }
-                }
-                // An open window, or a shop's shelves (always: the stock a shopkeeper sells lives there, and the
-                // trade window does not count as an open container window).
-                if (!inv || (!safeVisible(inv) && !safeIsShop(b))) continue;
-                Ogre::Vector3 at;
-                if (!safeBoxPosition(b, &at)) continue;
-                std::string sid = b->data->stringID;
-                uint32_t id = boxId(sid, at);
-                openNow.insert(id);
-                if (!g_boxes.count(id) && g_boxes.size() >= MAX_BOXES) continue;
-                WorldBox& w = g_boxes[id];
-                if (w.open) continue;
-                w.sid = sid; w.x = at.x; w.y = at.y; w.z = at.z; w.h = hand(b); w.open = true;
-                // Our copy (from our save) is not the town's: emptied until the host's content
-                // arrives, and not taken for a transfer of the player (no reference until then).
-                uint64_t k2 = key(CONTAINER_WORLD, id);
-                g_baseline.erase(k2); g_open.erase(k2); g_appliedHash.erase(k2);
-                Pending blank; blank.kind = CONTAINER_WORLD; blank.id = id; blank.since = GetTickCount();
-                applyMirror(blank);
-                sendBoxEvent(id, w, true);
-                log("town container %s opened: asking the host for its content (%08x)", sid.c_str(), id);
+                if (inv && safeVisible(inv)) openBox(b, inv, false, openNow);   // a container window is open on it
+            }
+        }
+        std::vector<Ogre::Vector3> shopDone;
+        for (size_t i = 0; i < shopCentres.size(); ++i)
+        {
+            bool covered = false;
+            for (size_t k = 0; k < shopDone.size() && !covered; ++k) covered = shopDone[k].squaredDistance(shopCentres[i]) < 30.f * 30.f;
+            if (covered) continue;
+            shopDone.push_back(shopCentres[i]);
+            lektor<RootObject*> list;
+            ou->getObjectsWithinSphere(list, shopCentres[i], SHOP_SCAN_RADIUS, BUILDING, 200, NULL);
+            for (uint32_t k = 0; k < list.size(); ++k)
+            {
+                Building* b = static_cast<Building*>(list[k]);
+                if (!safeIsShop(b)) continue;
+                Inventory* inv = worldInventory(b);
+                if (inv) openBox(b, inv, true, openNow);
             }
         }
         for (std::map<uint32_t, WorldBox>::iterator it = g_boxes.begin(); it != g_boxes.end(); ++it)
@@ -859,7 +896,6 @@ namespace
                 sendBoxEvent(it->first, it->second, false);
             }
     }
-
     // Host: content of a container to the clients that have it open (on change, or to one now).
     void pushBox(uint32_t id, WorldBox& w, int onlyTo)
     {
@@ -1101,6 +1137,33 @@ std::string items_debugLoot(Character* taker)
         return "moved " + name;
     }
     return "no remote inventory is open";
+}
+
+std::string items_debugShopTrade()
+{
+    g_testTradeUntil = GetTickCount() + 8000;
+    int shelves = 0;
+    for (std::map<uint32_t, WorldBox>::iterator it = g_boxes.begin(); it != g_boxes.end(); ++it) if (it->second.shelf && it->second.open) ++shelves;
+    char buf[64]; sprintf_s(buf, "%d shop shelf box(es) open", shelves);
+    return buf;
+}
+
+std::string items_debugBuyFromShelf(Character* taker)
+{
+    for (std::map<uint32_t, WorldBox>::iterator it = g_boxes.begin(); it != g_boxes.end(); ++it)
+    {
+        if (!it->second.shelf || !it->second.open) continue;
+        Inventory* inv = inventoryOf(CONTAINER_WORLD, it->first);
+        if (!inv) continue;
+        std::vector<Item*> items;
+        if (!safeSnapshot(inv, &items) || items.empty() || !items[0]) continue;
+        std::string name = describe(items[0]).item;
+        Item* out = safeTakeOut(inv, items[0]);
+        if (!out) return "could not take " + name;
+        if (!safeGive(taker, out)) return "took " + name + " but could not give it";
+        return "bought " + name + " from the shelves of " + it->second.sid;
+    }
+    return "no mirrored shop shelf with an item";
 }
 
 // Test runs: a crossbow of the base game equipped on c (its ghost on the other side gets it from
