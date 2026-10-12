@@ -776,6 +776,11 @@ namespace
 
     bool sharedWorldClient() { return g_cfg.townSync && ready() && !g_session.isHost() && !npcs_ownWorld(); }
 
+    bool safeIsShop(Building* b)
+    {
+        __try { return b->getSpecialFunction() == BF_SHOP; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
     bool safeBoxPosition(Building* b, Ogre::Vector3* at)
     {
         __try { if (!b->data) return false; *at = b->getPosition(); return true; }
@@ -819,7 +824,15 @@ namespace
             {
                 Building* b = static_cast<Building*>(list[k]);
                 Inventory* inv = worldInventory(b);
-                if (!inv || !safeVisible(inv)) continue;
+                if ((g_cfg.autotest || g_cfg.debugKeys) && safeIsShop(b))
+                {
+                    static int shown = 0;
+                    if (shown < 6) { ++shown; log("shop building %s within %.0f units of us: %s", b->data ? b->data->stringID.c_str() : "?", BOX_SCAN_RADIUS,
+                        inv ? "shared container" : (builds_netIdOf(b) ? "built by a player (own container)" : "no inventory / owned by our faction")); }
+                }
+                // An open window, or a shop's shelves (always: the stock a shopkeeper sells lives there, and the
+                // trade window does not count as an open container window).
+                if (!inv || (!safeVisible(inv) && !safeIsShop(b))) continue;
                 Ogre::Vector3 at;
                 if (!safeBoxPosition(b, &at)) continue;
                 std::string sid = b->data->stringID;

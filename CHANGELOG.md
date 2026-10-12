@@ -5,6 +5,13 @@ Workshop update must be announced here and in the Workshop "Change Notes".
 Format: one section per Workshop release, newest first. The protocol number is `PROTOCOL_VERSION`
 in `core/Protocol.h`.
 
+## [v20] - unreleased, protocol 20
+
+Fixed bugs reported in the Steam reviews:
+
+- Shopkeepers for players other than the host: stock to buy and payment (please report if still wrong)
+- NPC movement is smoother (updates every 50-100 ms instead of 100-500 ms)
+
 ## [v19] - unreleased, protocol 19
 
 Fixed bugs reported in the Steam reviews:

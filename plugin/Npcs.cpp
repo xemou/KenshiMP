@@ -14,6 +14,9 @@
 #include <kenshi/PlayerInterface.h>
 #include <kenshi/Character.h>
 #include <kenshi/Faction.h>
+#include <kenshi/Platoon.h>
+#include <kenshi/Inventory.h>
+#include <kenshi/Building/Building.h>
 #include <kenshi/GameData.h>
 #include <kenshi/RootObjectFactory.h>
 #include <kenshi/ZoneManager.h>
@@ -40,8 +43,9 @@ namespace
     const float QUERY_MERGE = 40.f;          // skip area queries whose centre is this close to one done
     const DWORD STATE_PERIOD_MS = 50;       // scheduler tick; each NPC has its own LOD rate below
 
-    // Level of detail, like a game server's entity tracker: close NPCs update often.
-    DWORD lodPeriod(float dist) { return dist < 80.f ? 100 : (dist < 250.f ? 200 : 500); }
+    // Level of detail, like a game server's entity tracker: close NPCs update often. Everything stays under
+    // 100 ms (the scheduler runs every STATE_PERIOD_MS = 50 ms, so a period of 99 means "every second tick").
+    DWORD lodPeriod(float dist) { return dist < 250.f ? 50 : 99; }
     const DWORD SCAN_PERIOD_MS = 1000;
     const DWORD LOOKS_PERIOD_MS = 3000;
     const DWORD CLEANUP_PERIOD_MS = 1000;
@@ -133,8 +137,143 @@ namespace
         return best;
     }
 
+    // Test runs: what makes a shopkeeper a shopkeeper (reviews: "nothing to buy at the trader", "I sell and
+    // get no money"). Logged once per trader the host replicates.
+    bool safeTraderProbe(Character* c, int* isTrader, int* platoonTrader, float* priceMult, char* squad, int squadLen, int* looseItems, int* sections)
+    {
+        __try
+        {
+            *isTrader = c->isATrader() ? 1 : 0;
+            ActivePlatoon* ap = c->getPlatoon();
+            *platoonTrader = ap ? (ap->getIsTrader() ? 1 : 0) : -1;
+            *priceMult = (ap && ap->me) ? ap->me->priceMultWhenITrade : -1.f;
+            squad[0] = 0;
+            if (ap && ap->me && ap->me->data) strncpy_s(squad, squadLen, ap->me->data->stringID.c_str(), _TRUNCATE);
+            if (ap && ap->me && ap->me->squadTemplate) { size_t l = strlen(squad); _snprintf_s(squad + l, squadLen - l, _TRUNCATE, " / template '%s'", ap->me->squadTemplate->stringID.c_str()); }
+            *looseItems = c->inventory ? (int)c->inventory->getAllItems().size() : -1;
+            *sections = c->inventory ? (int)c->inventory->getNumItems() : -1;   // all items, whatever the section
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    bool safeBuildingsAround(lektor<RootObject*>* out, const Ogre::Vector3* p, float r)
+    {
+        __try { ou->getObjectsWithinSphere(*out, *p, r, BUILDING, 200, NULL); return true; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    bool safeBuildingProbe(Building* b, int* items, int* func, char* sid, int sidLen)
+    {
+        __try
+        {
+            Inventory* inv = b->getInventory();
+            *items = inv ? (int)inv->getAllItems().size() : 0;
+            *func = (int)b->getSpecialFunction();
+            sid[0] = 0;
+            if (b->data) strncpy_s(sid, sidLen, b->data->stringID.c_str(), _TRUNCATE);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    // "name:items" of each inventory section of c.
+    bool safeSectionNames(Character* c, char* out, int len, int* count)
+    {
+        __try
+        {
+            out[0] = 0; *count = 0;
+            if (!c->inventory) return false;
+            lektor<InventorySection*>& all = c->inventory->getAllSections();
+            *count = (int)all.size();
+            for (uint32_t i = 0; i < all.size() && i < 24; ++i)
+            {
+                InventorySection* s = all[i];
+                if (!s) continue;
+                char one[80]; sprintf_s(one, "%s%s:%d", i ? ", " : "", s->name.c_str(), (int)s->getItems().size());
+                strcat_s(out, len, one);
+            }
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    void logStockBuildings(Character* c, const char* when)
+    {
+        Ogre::Vector3 at = c->getPosition();
+        lektor<RootObject*> around;
+        if (!safeBuildingsAround(&around, &at, 80.f)) return;
+        int shown = 0;
+        for (uint32_t i = 0; i < around.size() && shown < 10; ++i)
+        {
+            Building* b = static_cast<Building*>(around[i]);
+            int n = 0, func = -1; char sid[120];
+            if (!safeBuildingProbe(b, &n, &func, sid, sizeof(sid)) || n <= 0) continue;
+            ++shown;
+            log("   [%s] building '%s' holds %d item(s), special function %d, %.0f units away", when, sid, n, func, b->getPosition().distance(at));
+        }
+        if (!shown) log("   [%s] no building holding items within 80 units (%d building(s) checked)", when, (int)around.size());
+    }
+    bool g_probedRestock = false;
+    bool safeRestock(Character* c, int* itemsAfter, int* vendorList, int* specialList)
+    {
+        __try
+        {
+            ActivePlatoon* ap = c->getPlatoon();
+            if (!ap) return false;
+            *vendorList = ap->getHasVendorList() ? 1 : 0;
+            *specialList = ap->getHasSpecialItemsList() ? 1 : 0;
+            ap->refreshInventory(true);
+            *itemsAfter = c->inventory ? (int)c->inventory->getAllItems().size() : -1;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    void logTrader(Character* c, uint32_t id)
+    {
+        if (!g_cfg.autotest && !g_cfg.debugKeys) return;
+        int isTrader = 0, platTrader = 0, items = 0, sections = 0; float mult = 0; char squad[160];
+        if (!safeTraderProbe(c, &isTrader, &platTrader, &mult, squad, sizeof(squad), &items, &sections)) return;
+        if (!isTrader && platTrader != 1) return;
+        static int logged = 0;
+        if (logged++ >= 12) return;
+        log("trader NPC '%s' (%08x): isATrader=%d, platoon isTrader=%d, platoon template '%s', price multiplier %.2f, %d loose item(s), %d item(s) in all sections, money %d",
+            c->getName().c_str(), id, isTrader, platTrader, squad, mult, items, sections, items_moneyOf(c));
+        {
+            char names[400]; int n = 0;
+            if (safeSectionNames(c, names, sizeof(names), &n)) log("   inventory sections (%d): %s", n, names);
+        }
+        // Where is its stock? Buildings around it that hold items (shop counter, storage...).
+        logStockBuildings(c, "before restock");
+        // Experiment (test runs only): does the squad's own restock put the stock somewhere?
+        if (items == 0 && !g_probedRestock)
+        {
+            g_probedRestock = true;
+            int before = items, after = -2, vendor = -1, special = -1;
+            bool called = safeRestock(c, &after, &vendor, &special);
+            log("   restock experiment: refreshInventory(true) %s; loose items %d -> %d (has vendor list %d, special items list %d)",
+                called ? "called" : "FAILED", before, after, vendor, special);
+            logStockBuildings(c, "after restock");
+        }
+    }
+
+    // A shopkeeper's squad, for the ghost on the client (protocol 20): see EntitySpawn.
+    bool safeTradeSpawn(Character* c, char* squad, int squadLen, float* mult, int* flags)
+    {
+        __try
+        {
+            ActivePlatoon* ap = c->getPlatoon();
+            if (!ap || !ap->me || !ap->getIsTrader()) return false;
+            // The squad's own data is a numbered copy ("Marchands Libres_0"); the template is what to recreate.
+            GameData* tmpl = ap->me->squadTemplate ? ap->me->squadTemplate : ap->me->data;
+            if (!tmpl) return false;
+            strncpy_s(squad, squadLen, tmpl->stringID.c_str(), _TRUNCATE);
+            *mult = ap->me->priceMultWhenITrade;
+            *flags = (ap->me->_iBuyStolenGoods ? 1 : 0) | (ap->me->_iBuyIllegalGoods ? 2 : 0);
+            return squad[0] != 0;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+
     void sendSpawnTo(uint8_t client, Npc& n, Character* c)
     {
+        logTrader(c, n.id);
         EntitySpawn sp;
         sp.netId = n.id;
         sp.kind = KIND_CHARACTER;
@@ -144,6 +283,10 @@ namespace
         sp.x = p.x; sp.y = p.y; sp.z = p.z;
         Faction* f = c->getFaction();
         sp.factionSid = f && f->getData() ? f->getData()->stringID : std::string();
+        {
+            char squad[160]; float mult = 1.f; int flags = 0;
+            if (safeTradeSpawn(c, squad, sizeof(squad), &mult, &flags)) { sp.hasTrade = true; sp.squadSid = squad; sp.priceMult = mult; sp.tradeFlags = (uint8_t)flags; }
+        }
         ByteWriter w; sp.write(w);
         g_session.sendTo(client, MSG_ENTITY_SPAWN, w.data);
         Bytes a = cs_appearanceMsg(c, n.id), e = cs_equipmentMsg(c, n.id);
@@ -563,6 +706,20 @@ std::string npcs_debugCensus()
     {
         std::set<Character*> locals; collectAround(mine, radii[i], locals); local[i] = (int)locals.size();
         std::vector<uint32_t> ids; chars_npcGhostsNear(mine, radii[i], ids); ghosts[i] = (int)ids.size();
+    }
+    // Traders in the surroundings (replicated or not): probe each one once (what makes a shop work).
+    {
+        static std::set<Character*> probed;
+        std::set<Character*> around; collectAround(mine, 1500.f, around);
+        for (std::set<Character*>::iterator it = around.begin(); it != around.end(); ++it)
+        {
+            if (probed.count(*it)) continue;
+            int isT = 0, platT = 0, items = 0, sect = 0; float mult = 0; char squad[8];
+            if (!safeTraderProbe(*it, &isT, &platT, &mult, squad, sizeof(squad), &items, &sect) || (!isT && platT != 1)) continue;
+            probed.insert(*it);
+            logTrader(*it, 0);
+            if (probed.size() >= 6) break;
+        }
     }
     const char* mode = g_session.isHost() ? "host" : (!g_session.active() ? "not connected" : (g_zoneMode == MODE_SHARED ? "shared world" : (g_zoneMode == MODE_APART ? "own world" : "mode unknown")));
     char buf[400];

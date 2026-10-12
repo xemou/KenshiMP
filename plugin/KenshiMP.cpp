@@ -195,6 +195,7 @@ namespace
             else if (k == "player_names") g_cfg.playerNames = toBool(v);
             else if (k == "autotest_load") g_cfg.autotestLoad = v;
             else if (k == "autotest") g_cfg.autotest = toBool(v);
+        else if (k == "autotest_goto_shop") g_cfg.autotestGotoShop = toBool(v);
             else if (k == "lobby_key")
             {
                 // F1..F12
@@ -795,6 +796,8 @@ namespace
         {
             townTargets = true;
             log("autotest: town door %s", builds_debugTownDoor().c_str());
+            log("autotest: shop %s", builds_debugShop().c_str());
+            if (g_cfg.autotestGotoShop) log("autotest: goto shop -> %s", builds_debugGotoShop().c_str());
             log("autotest: unique %s", towns_debugUnique().c_str());
             log("autotest: town override %s", towns_debugOverride().c_str());
             log("autotest: far town %s", towns_debugFarTown().c_str());

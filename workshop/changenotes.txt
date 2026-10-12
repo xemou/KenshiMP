@@ -1,3 +1,10 @@
+v20 - bug fixes (protocol 20: everybody must update)
+
+Fixed the bugs you reported:
+
+- Shopkeepers for players other than the host: stock to buy and payment (tell me if it is still wrong)
+- NPCs move more smoothly (faster updates)
+
 v19 - bug fixes (protocol 19: everybody must update)
 
 Thank you for the reviews. Fixed the bugs you reported:

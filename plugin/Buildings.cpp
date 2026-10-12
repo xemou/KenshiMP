@@ -33,6 +33,9 @@
 #include <math.h>
 #include <stdio.h>
 
+#include <kenshi/Platoon.h>
+#include <kenshi/CharMovement.h>
+
 using namespace mp;
 
 void builds_flushDismantle(bool force);   // defined with the dismantle hook below (global scope)
@@ -941,6 +944,7 @@ namespace kmp { namespace {
 namespace
 {
     bool censusIsFurniture(Building* b) { __try { return b->isFurniture(); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; } }
+    bool censusIsShop(Building* b) { __try { return b->getSpecialFunction() == BF_SHOP; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; } }
     bool censusIsDoor(Building* b) { __try { return b->isDoor(); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; } }
     Building* censusParent(Building* b) { __try { return b->furnitureParentBuilding(); } __except (EXCEPTION_EXECUTE_HANDLER) { return NULL; } }
     bool censusList(lektor<RootObject*>& out, const Ogre::Vector3& p, float r)
@@ -992,6 +996,60 @@ std::vector<std::string> builds_debugCensus(float radius)
     if (parentless) { sprintf_s(buf, "building census: %d furniture piece(s) with no parent structure", parentless); out.push_back(buf); }
     if (!empty.empty()) out.push_back("building census: structures without furniture: " + empty);
     return out;
+}
+
+namespace
+{
+    bool safeTeleportSquad(Character* c, const Ogre::Vector3* to)
+    {
+        __try { c->getMovement()->_setPositionAndTeleport(*to, 0); return true; }   // (as the ghosts are placed, Characters.cpp)
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+}
+}
+namespace kmp {
+std::string builds_debugShop();
+// Test (autotest_goto_shop=1): our squad is moved next to the nearest shop building, so its shelves are in reach.
+std::string builds_debugGotoShop()
+{
+    std::string shop = builds_debugShop();
+    float x = 0, y = 0, z = 0;
+    size_t a = shop.find(';');
+    if (a == std::string::npos || sscanf_s(shop.c_str() + a + 1, "%f;%f;%f", &x, &y, &z) != 3) return "no shop found";
+    if (!ou || !ou->player || ou->player->playerCharacters.size() == 0) return "no character";
+    int moved = 0;
+    for (uint32_t i = 0; i < ou->player->playerCharacters.size(); ++i)
+    {
+        Ogre::Vector3 to(x + 6.f + 2.f * i, y, z + 6.f);
+        if (safeTeleportSquad(ou->player->playerCharacters[i], &to)) ++moved;
+    }
+    return moved ? "moved " + std::string(moved > 1 ? "squad" : "character") + " next to " + shop : "teleport failed";
+}
+
+// Test (autotest): nearest shop building (BF_SHOP) around our first character, as "sid;x;y;z", "" if none.
+std::string builds_debugShop()
+{
+    if (!ou || !ou->player || ou->player->playerCharacters.size() == 0) return "";
+    Ogre::Vector3 me = ou->player->playerCharacters[0]->getPosition();
+    Building* best = NULL; float bestD = 1e30f;
+    const float radii[3] = { 600.f, 1500.f, 3000.f };
+    for (int r = 0; r < 3 && !best; ++r)
+    {
+        lektor<RootObject*> list;
+        if (!censusList(list, me, radii[r])) continue;
+        for (uint32_t i = 0; i < list.size(); ++i)
+        {
+            Building* b = static_cast<Building*>(list[i]);
+            if (!b || !censusIsShop(b)) continue;
+            float d = b->getPosition().squaredDistance(me);
+            if (d < bestD) { bestD = d; best = b; }
+        }
+    }
+    if (!best) return "";
+    Ogre::Vector3 p = best->getPosition();
+    char buf[256];
+    sprintf_s(buf, "%s;%.2f;%.2f;%.2f", best->data ? best->data->stringID.c_str() : "?", p.x, p.y, p.z);
+    return buf;
 }
 
 // Test (autotest): nearest town building with doors around our first character, as

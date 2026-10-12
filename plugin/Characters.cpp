@@ -1004,6 +1004,95 @@ namespace
         return safeActive(p);
     }
 
+    // A host shopkeeper's ghost lives in its own squad made from the host's squad template, with the host's
+    // price multiplier: that is what makes the game treat it as a trader (reviews: "nothing to buy at the
+    // trader", "I sell and get no money").
+    std::map<uint32_t, Platoon*> g_traderSquads;
+    bool safeSetTrade(Platoon* p, float mult, int flags)
+    {
+        __try { p->priceMultWhenITrade = mult; p->_iBuyStolenGoods = (flags & 1) != 0; p->_iBuyIllegalGoods = (flags & 2) != 0; return true; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    GameData* safeDataByName(const std::string* name, itemType category)
+    {
+        __try { return ou->gamedata.getDataByName(*name, category); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return NULL; }
+    }
+    ActivePlatoon* traderSquadFor(const EntitySpawn& sp, Faction* f, const Ogre::Vector3& pos)
+    {
+        std::map<uint32_t, Platoon*>::iterator it = g_traderSquads.find(sp.netId);
+        if (it != g_traderSquads.end())
+            if (ActivePlatoon* a = safeActive(it->second)) return a;
+        // The host's squad is a numbered copy of its template ("Marchands Libres_0"): try the name as is, then without the number.
+        // The id is the numbered copy's name, not a template id: look the template up by id, then by name
+        // (with and without the number) among the squad templates.
+        GameData* squadData = dataOf(sp.squadSid);
+        std::string bare = sp.squadSid;
+        {
+            size_t us = bare.find_last_of('_');
+            if (us != std::string::npos && us + 1 < bare.size() && bare.find_first_not_of("0123456789", us + 1) == std::string::npos) bare = bare.substr(0, us);
+        }
+        const itemType cats[3] = { SQUAD_TEMPLATE, UNIQUE_SQUAD_TEMPLATE, PLATOON };
+        for (int i = 0; i < 3 && !squadData; ++i) squadData = safeDataByName(&sp.squadSid, cats[i]);
+        for (int i = 0; i < 3 && !squadData; ++i) squadData = safeDataByName(&bare, cats[i]);
+        if (squadData) log("trader %08x: squad '%s' -> template '%s' (%s)", sp.netId, sp.squadSid.c_str(), squadData->name.c_str(), squadData->stringID.c_str());
+        if (!squadData) { log("trader %08x: unknown squad template '%s' (missing mod?), ghost created as a plain NPC", sp.netId, sp.squadSid.c_str()); return NULL; }
+        Platoon* p = safeNewPlatoon(f, squadData, &pos);
+        if (!p) return NULL;
+        safeSetTrade(p, sp.priceMult, sp.tradeFlags);
+        g_traderSquads[sp.netId] = p;
+        return safeActive(p);
+    }
+    // After the body exists: what the engine thinks of it (and, in test runs, what a trade would show).
+    bool safeTraderState(Character* c, int* isTrader, int* vendorList, int* platoonTrader)
+    {
+        __try
+        {
+            ActivePlatoon* ap = c->getPlatoon();
+            *isTrader = c->isATrader() ? 1 : 0;
+            *vendorList = ap ? (ap->getHasVendorList() ? 1 : 0) : -1;
+            *platoonTrader = ap ? (ap->getIsTrader() ? 1 : 0) : -1;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    bool safeSetupTrader(Character* c, bool restock)
+    {
+        __try
+        {
+            ActivePlatoon* ap = c->getPlatoon();
+            if (!ap) return false;
+            ap->setupTraderBuildings();
+            if (restock) ap->refreshInventory(true);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    bool safeShelfQuery(lektor<RootObject*>* out, const Ogre::Vector3* at, float radius)
+    {
+        __try { ou->getObjectsWithinSphere(*out, *at, radius, BUILDING, 200, NULL); return true; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    int safeShelfBuildingItems(Building* b)
+    {
+        __try
+        {
+            if (!b || b->getSpecialFunction() != BF_SHOP) return 0;
+            Inventory* inv = b->getInventory();
+            return inv ? (int)inv->getAllItems().size() : 0;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+    }
+    int safeShelfItems(Character* c, float radius)   // items held by shop buildings within radius (test probe)
+    {
+        Ogre::Vector3 at = c->getPosition();
+        lektor<RootObject*> around;
+        if (!safeShelfQuery(&around, &at, radius)) return -1;
+        int total = 0;
+        for (uint32_t i = 0; i < around.size(); ++i) total += safeShelfBuildingItems(static_cast<Building*>(around[i]));
+        return total;
+    }
+
     void spawnGhost(uint8_t owner, const EntitySpawn& sp)
     {
         Ghost& g = g_ghosts[sp.netId];
@@ -1040,10 +1129,25 @@ namespace
             // Keep the (bodiless) entry: it holds appearance/gear already received for it.
             if (!g_local.empty() && nearestLocal > SPAWN_RANGE) return;
         }
-        ActivePlatoon* squad = ghostSquadFor(owner, f, pos);
+        ActivePlatoon* squad = NULL;
+        bool trader = worldNpc && sp.hasTrade;
+        if (trader) squad = traderSquadFor(sp, f, pos);
+        if (!squad) { trader = false; squad = ghostSquadFor(owner, f, pos); }
         if (!squad) { log("no ghost squad for player %d", (int)owner); return; }
         Character* c = static_cast<Character*>(safeSpawn(f, &pos, tmpl, squad));
         if (!c) { log("factory returned no character for %08x", sp.netId); return; }
+        if (trader)
+        {
+            int isT = -1, vend = -1, platT = -1;
+            safeTraderState(c, &isT, &vend, &platT);
+            bool probe = g_cfg.autotest || g_cfg.debugKeys;
+            int shelvesBefore = probe ? safeShelfItems(c, 80.f) : 0;
+            bool set = safeSetupTrader(c, probe);   // (the restock is a test-run experiment for now)
+            static int logged = 0;
+            if (logged++ < 8)
+                log("trader ghost %08x '%s': squad '%s', isATrader=%d, vendor list=%d, squad isTrader=%d, price x%.2f; setupTraderBuildings %s; shop items within 80 units %d -> %d",
+                    sp.netId, sp.displayName.c_str(), sp.squadSid.c_str(), isT, vend, platT, sp.priceMult, set ? "called" : "FAILED", shelvesBefore, probe ? safeShelfItems(c, 80.f) : 0);
+        }
         g.h = hand(c);
         g.last.netId = sp.netId;
         g.combatTarget = NULL; g.mirroredTask = -1; g.lastSpeed = -1;
@@ -1740,6 +1844,7 @@ void chars_onWorldReload()
     g_ghosts.clear();
     g_onMap.clear();   // the map was rebuilt with the world
     g_ghostSquads.clear();
+    g_traderSquads.clear();
     rebuildGhostIndex();
     g_forceLooks = true;
 }

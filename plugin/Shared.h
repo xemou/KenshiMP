@@ -50,12 +50,13 @@ struct Config
     int backupSaves;       // host: backups kept per save (copied when a hosted game is ready), 0 = off
     std::string autotestLoad;  // test: save loaded automatically from the title screen
     bool autotest;             // test: scripted checks once another player is there (log "autotest:")
+    bool autotestGotoShop;     // test: the squad is moved next to the nearest shop (shop shelves in reach)
     std::string lobbyKeyName;
     Config() : mode("off"), address("127.0.0.1"), port(47000), name("Player"), faction("My Faction"),
                relation(0), ghostAI("none"), syncAppearance(true), syncEquipment(true), syncBuildings(true),
                debugKeys(false), npcSync(true), strictMods(true), autoReconnect(true), pauseSync(true),
                renderSmoothing(true), weatherSync(true), lobbyKey(VK_F4), lobbyKeyName("F4"), language("auto"), playersOnMap(true),
-               tuneSpeedMatch(true), tuneTrail(true), tuneRepath(true), tuneUnblock(true), tuneOnScreen(true), ghostNoCollide(false), loadSharing(false), assaultHostility(false), playerNames(true), townSync(true), backupSaves(5), autotest(false) {}
+               tuneSpeedMatch(true), tuneTrail(true), tuneRepath(true), tuneUnblock(true), tuneOnScreen(true), ghostNoCollide(false), loadSharing(false), assaultHostility(false), playerNames(true), townSync(true), backupSaves(5), autotest(false), autotestGotoShop(false) {}
 };
 
 extern mp::Session g_session;
@@ -265,6 +266,8 @@ std::string towns_debugFarTown();     // test: "name;x,y,z" of a town 8000-20000
 std::string towns_debugOverride();    // test: "townSid;overrideSid" for a far town that has another version
 std::vector<std::string> builds_debugCensus(float radius);   // test: furnished / empty structures around our first character
 std::string npcs_debugCensus();                               // test: local NPCs, host NPC ghosts, zone state around our first character
+std::string builds_debugShop();       // test: "sid;x;y;z" of the nearest shop building
+std::string builds_debugGotoShop();   // test: moves our squad next to it
 std::string builds_debugTownDoor();   // test: "sid;x;y;z;door;doorCount" of a nearby town building
 
 // Bounties.cpp: crimes seen in the host's world reach the real character

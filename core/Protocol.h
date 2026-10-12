@@ -16,7 +16,7 @@
 
 namespace mp {
 
-const uint32_t PROTOCOL_VERSION = 19;
+const uint32_t PROTOCOL_VERSION = 20;
 
 // World NPCs replicated by the host use the upper half of the host's local id space.
 const uint32_t NPC_ID_FLAG = 0x800000;
@@ -245,17 +245,31 @@ struct EntitySpawn
     std::string displayName;
     float x, y, z, yaw;
     std::string factionSid;     // world NPCs: FCS id of their real faction ("" = the sender's faction)
+    // Optional trailer (protocol 20): a shopkeeper's squad. The ghost is created in a squad made from the
+    // same template, so the game treats it as a trader (vendor list, prices, what it buys).
+    bool hasTrade;
+    std::string squadSid;       // the squad's GameData id (what makes it a trader squad)
+    float priceMult;            // Platoon::priceMultWhenITrade
+    uint8_t tradeFlags;         // 1 = buys stolen goods, 2 = buys illegal goods
 
-    EntitySpawn() : netId(0), kind(0), x(0), y(0), z(0), yaw(0) {}
+    EntitySpawn() : netId(0), kind(0), x(0), y(0), z(0), yaw(0), hasTrade(false), priceMult(1.f), tradeFlags(0) {}
     void write(ByteWriter& w) const
     {
         w.u32(netId); w.u8(kind); w.str(gameDataName); w.str(displayName);
         w.f32(x); w.f32(y); w.f32(z); w.f32(yaw); w.str(factionSid);
+        if (hasTrade) { w.u8(1); w.str(squadSid); w.f32(priceMult); w.u8(tradeFlags); }
     }
     void read(ByteReader& r)
     {
         netId = r.u32(); kind = r.u8(); gameDataName = r.str(); displayName = r.str();
         x = r.f32(); y = r.f32(); z = r.f32(); yaw = r.f32(); factionSid = r.str();
+        hasTrade = false;
+        if (r.ok() && r.remaining() && r.u8() == 1)
+        {
+            squadSid = r.str(); priceMult = r.f32(); tradeFlags = r.u8();
+            hasTrade = r.ok() && !squadSid.empty() && finiteF(priceMult);
+            if (hasTrade) priceMult = clampF(priceMult, 0.f, 20.f);
+        }
     }
     bool sanitize() { if (!finiteF(yaw)) yaw = 0; return validPos(x, y, z) && !gameDataName.empty(); }
 };
