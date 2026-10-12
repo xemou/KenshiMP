@@ -11,3 +11,19 @@ tests/harness/bg_backup/
 tests/harness/crashes/
 tests/harness/*.txt
 tests/harness/*.png
+
+# third-party mods downloaded for reference (not ours)
+third_party/
+
+# Only the mod's code is published (the rest stays on the author's PC)
+ROADMAP.md
+RISKS.md
+COMPATIBILITY.md
+CHANGELOG.md
+GUIDE.md
+GUIDE_FR.md
+REVIEWS_REPORT.md
+workshop/
+tests/
+third_party/
+graphify-out/
