@@ -197,6 +197,8 @@ namespace
             else if (k == "autotest") g_cfg.autotest = toBool(v);
         else if (k == "autotest_goto_shop") g_cfg.autotestGotoShop = toBool(v);
         else if (k == "autotest_carry") g_cfg.autotestCarry = toBool(v);
+        else if (k == "npc_range") g_cfg.npcRange = atoi(v.c_str());
+        else if (k == "autotest_shots") g_cfg.autotestShots = atoi(v.c_str());
             else if (k == "lobby_key")
             {
                 // F1..F12
@@ -482,6 +484,10 @@ namespace
         case MSG_NPC_CLAIM:
             npcs_onClaim(e.sender, e.body);
             break;
+        case MSG_AUTH_TABLE:
+        case MSG_AUTH_HANDOFF:
+            auth_onMessage(e);
+            break;
         case MSG_RESYNC:
             log("%s reloaded its world, resending everything", playerName(e.sender).c_str());
             chars_forgetMovement(e.sender);
@@ -667,6 +673,42 @@ namespace
         chars_localCharacters(locals);
         Character* me = locals.empty() ? NULL : locals[0].second;
         if (!me) return;
+        // Step A of AUTHORITY_PLAN.md: every 2 s, one "auth:" line per entity (own / copy) for the offline comparison.
+        { static DWORD lastAuth = 0;
+          if (now - lastAuth >= 2000) { lastAuth = now; chars_debugAuthority(); npcs_debugAuthority(); } }
+        // Frames of what the player sees, saved by the game itself (autotest_shots=N: every N seconds after the start).
+        if (g_cfg.autotestShots > 0)
+        {
+            static int shotNo = 0; static DWORD lastShot = 0;
+            if (s >= 40 && (lastShot == 0 || now - lastShot >= (DWORD)g_cfg.autotestShots * 1000) && shotNo < 18)
+            {
+                lastShot = now;
+                char f[64]; sprintf_s(f, "kmp_shot_%s_%d.png", g_session.isHost() ? "host" : "client", ++shotNo);
+                log("autotest: screenshot %s -> %s", f, chars_screenshot(f) ? "saved" : "failed");
+                if (shotNo == 3 && g_cfg.autotestGotoShop) log("autotest: goto shop (shots) -> %s", builds_debugGotoShop().c_str());
+                if (shotNo >= 2) chars_debugNpcCensus();
+                if (shotNo >= 5 && shotNo <= 8) chars_debugShopView();
+                // treatment: the HOST is wounded (shot 2), the CLIENT heals the copy it sees (shot 4), the host looks at itself (shots 4-7)
+                if (shotNo == 2 && g_session.isHost()) log("autotest: wound -> %s", chars_debugWoundSelf(me).c_str());
+                if (shotNo == 4 && !g_session.isHost()) log("autotest: heal -> %s", chars_debugHealGhost(me).c_str());
+                if (shotNo == 6 && g_session.isHost()) log("autotest: heal control -> %s", chars_debugHealSelf(me).c_str());
+                if (shotNo >= 3 && shotNo <= 7 && g_session.isHost()) log("autotest: flesh -> %s", chars_debugFleshSelf(me).c_str());
+                if (shotNo >= 3 && shotNo <= 7 && !g_session.isHost()) log("autotest: the copy's medical state -> %s", chars_debugGhostMedical().c_str());
+                // carry: the HOST is knocked out (shot 9), the CLIENT picks the copy up (shot 10); frames of both games follow
+                if (shotNo == 9 && g_session.isHost()) log("autotest: host knocked out -> %s", chars_debugKnockOutSelf(me, 70.f).c_str());
+                // the client picks the copy up as soon as it sees it knocked out (the two games' clocks are not aligned)
+                { static bool lifted = false;
+                  if (shotNo >= 6 && !g_session.isHost() && !lifted)
+                  { std::string r = chars_debugCarryGhost(me); if (r.compare(0, 5, "order") == 0) { lifted = true; log("autotest: lift -> %s", r.c_str()); } } }
+                if (shotNo >= 7 && shotNo <= 15 && !g_session.isHost()) log("autotest: carry state -> %s", chars_debugCarryState().c_str());
+                if (shotNo >= 9) chars_debugFocus(me, 70.f, shotNo == 11 ? 90.f : (shotNo == 13 ? -90.f : 0.f));   // 11 / 13: the character high / low on the screen (name label check)   // the carrying scene, beside the interface windows
+                { static bool claimed = false;   // step C: the client takes over a host NPC; the host must answer with a grant
+                  if (shotNo >= 10 && !g_session.isHost() && !claimed)
+                  { std::string r = chars_debugClaimNpc(me); if (r.compare(0, 8, "claiming") == 0) claimed = true; log("autotest: claim NPC -> %s", r.c_str()); } }
+                if (shotNo == 5) log("autotest: talk -> %s", chars_debugTalk(me).c_str());
+                if (shotNo == 6 || shotNo == 7) log("autotest: talk state -> %s", chars_debugTalkState().c_str());
+            }
+        }
         // autotest_carry=1: its own short script (other players' knocked-out characters carried, ours carried).
         if (g_cfg.autotestCarry)
         {
@@ -734,7 +776,8 @@ namespace
         if (step == 90 && s >= 121) { step = 91; log("autotest: speed lock -> game speed is x%.1f (was set to x3)", ou->getFrameSpeedMultiplier()); }
         // Client only: GO TO the host's character (what the multiplayer window's GO TO button does).
         if (step == 91 && s >= 123) { step = 92; log("autotest: goto -> %s", g_session.isHost() ? "skipped (host)" : chars_regroupTo(other).c_str()); }
-        if (step == 92 && s >= 150) { step = -1; chars_logHitStats(); log("autotest: lobby open after close -> %d; done", (int)lobby_isOpen()); }
+        // (with autotest_shots the frames go on after the script's end: step 93 does nothing)
+        if (step == 92 && s >= 150) { step = g_cfg.autotestShots > 0 ? 93 : -1; chars_logHitStats(); log("autotest: lobby open after close -> %d; done", (int)lobby_isOpen()); }
     }
 
     bool gameFocused()
@@ -777,6 +820,12 @@ namespace
 
     void startSession()
     {
+        if (!mp_hooksOk())
+        {
+            static bool told = false;
+            if (!told) { told = true; lobby_setError(T("Multiplayer is off: this version of Kenshi is not supported (game functions not found). Your saves are untouched.")); }
+            return;
+        }
         g_session.setModList(modList(), g_cfg.strictMods);
         g_session.setPassword(g_cfg.password);
         std::string err;
@@ -1019,6 +1068,7 @@ namespace
         builds_tick(now);
         world_tick(now);
         npcs_tick(now);
+        auth_tick(now);
         items_tick(now);
         trade_tick(now);
         weather_tick(now);
@@ -1066,9 +1116,28 @@ std::string mp_configDir()
 void log(const char* fmt, ...)
 {
     char buf[512];
-    va_list a; va_start(a, fmt); vsprintf_s(buf, sizeof(buf), fmt, a); va_end(a);
+    va_list a; va_start(a, fmt); _vsnprintf_s(buf, sizeof(buf), _TRUNCATE, fmt, a); va_end(a);   // truncates instead of aborting the game on a long line
     DebugLog(std::string("KenshiMP: ") + buf);
 }
+
+static std::vector<std::string> g_problems;
+static std::map<std::string, DWORD> g_problemAt;
+static bool g_hooksOk = true;
+bool mp_hooksOk() { return g_hooksOk; }
+void problem(const char* key, const char* fmt, ...)
+{
+    DWORD now = GetTickCount();
+    std::map<std::string, DWORD>::iterator it = g_problemAt.find(key);
+    if (it != g_problemAt.end() && now - it->second < 60000) return;   // once a minute per kind
+    g_problemAt[key] = now;
+    char buf[400];
+    va_list a; va_start(a, fmt); vsprintf_s(buf, sizeof(buf), fmt, a); va_end(a);
+    char line[460]; sprintf_s(line, "[%lu s] %s", (unsigned long)(now / 1000), buf);
+    g_problems.push_back(line);
+    if (g_problems.size() > 60) g_problems.erase(g_problems.begin());
+    DebugLog(std::string("KenshiMP: PROBLEM: ") + buf);
+}
+std::vector<std::string> problems_recent() { return g_problems; }
 
 void showMessage(const std::string& s) { if (ou) ou->showPlayerAMessage(s, false); }
 
@@ -1303,5 +1372,10 @@ __declspec(dllexport) void startPlugin()
     if (!items_install()) ok = false;
     weather_install();
     towns_install();
+    if (!ok)
+    {
+        g_hooksOk = false;
+        problem("hooks", "some game functions were not found (this Kenshi version is not supported): multiplayer is switched off to protect your saves");
+    }
     if (ok) DebugLog("KenshiMP: plugin loaded (mode=" + g_cfg.mode + ")");
 }

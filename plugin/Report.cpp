@@ -100,6 +100,9 @@ namespace
             fprintf(f, "player %d: %s (faction %s)%s\n", (int)ps[i].id, ps[i].name.c_str(), ps[i].faction.c_str(),
                     ps[i].id == g_session.localId() ? "  <- this PC" : "");
 
+        fprintf(f, "\n[problems detected by the mod]\n");
+        { std::vector<std::string> pr = problems_recent(); if (pr.empty()) fprintf(f, "none\n"); for (size_t i = 0; i < pr.size(); ++i) fprintf(f, "%s\n", pr[i].c_str()); }
+
         fprintf(f, "\n[world]\n");
         if (!mp_worldLoaded()) { fprintf(f, "no game loaded (title screen or loading)\n"); return; }
         lektor<Character*>& mine = ou->player->playerCharacters;

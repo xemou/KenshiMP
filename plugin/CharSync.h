@@ -3,6 +3,7 @@
 #include "../core/Protocol.h"
 #include <ogre/OgreVector3.h>
 #include <vector>
+#include <string>
 
 class Character;
 class Faction;
@@ -12,6 +13,8 @@ namespace kmp {
 // Full state of a character (transform, health, combat, task...).
 void cs_captureState(Character* c, uint32_t id, mp::EntityState& s);
 // Bodies of MSG_APPEARANCE / MSG_EQUIPMENT / MSG_STATS for this character.
+std::string cs_appearanceDigest(Character* c);
+void cs_appearanceDump(Character* c, uint32_t id, const char* role);   // test: every appearance key in the log   // test: five digests of the appearance data
 mp::Bytes cs_appearanceMsg(Character* c, uint32_t id);
 mp::Bytes cs_equipmentMsg(Character* c, uint32_t id);
 mp::Bytes cs_statsMsg(Character* c, uint32_t id);
@@ -40,6 +43,7 @@ bool cs_restoreNpc(const StashedNpc& s);               // create it again as a l
 void cs_charactersNear(Faction* f, const Ogre::Vector3& pos, float radius, std::vector<Character*>& out);
 // Every character the engine is currently updating (GameWorld::charUpdateListMain).
 void cs_allActiveCharacters(std::vector<Character*>& out);
+void npcs_realAround(const std::vector<Ogre::Vector3>& centres, float radius, std::vector<Character*>& out);   // test: the host's real NPCs near points
 
 // Npcs.cpp
 uint32_t npcs_netIdOf(Character* c);   // host: replicated NPC id, 0 otherwise

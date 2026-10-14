@@ -441,9 +441,14 @@ public:
             {
                 std::string text = "mod lists differ (player '" + name + "'). " + modDiff(myMods, theirMods);
                 if (strict) { reject(c, ("Your mods must match the host's. " + text).c_str()); return; }
+                text += "Playing anyway: what comes from a mod the other side lacks is replaced or skipped.";
                 NetEvent w; w.kind = NetEvent::EV_WARNING; w.text = text; push(w);
             }
 
+            // A player named like the host would share its name (labels, chat, saved slots): it picks another one.
+            // (A second client under an existing client's name is a reconnecting player: it takes its slot back, below.)
+            { bool host_ = false; { Lock l(cs); host_ = (name == self.name); }
+              if (host_) { reject(c, ("A player named '" + name + "' is already connected (the host): choose another player name (MULTIPLAYER window, ADVANCED SETTINGS).").c_str()); return; } }
             // The same player reconnecting before we noticed that the old connection died (its
             // game restarted, its network dropped for a moment): end the old one now, so the
             // player gets its slot back instead of a new number with ghosts shown twice.
@@ -518,7 +523,7 @@ public:
         if (!isRelayed(type)) return;
 
         uint8_t sender = c->playerId;
-        if (type == MSG_DAMAGE || type == MSG_BUILDING_DAMAGE || type == MSG_ITEM_TAKE || type == MSG_ITEM_GIVE || type == MSG_GROUND_TAKE || type == MSG_TRADE || type == MSG_ITEM_UNDO || type == MSG_ZONE_MODE || type == MSG_WORLD_STATE_REPORT || type == MSG_WORLD_BUILDING_REPORT || type == MSG_BOUNTY_CRIME || type == MSG_WORLD_CONTAINER || type == MSG_INVENTORY_REQUEST || type == MSG_HEAL || type == MSG_CARRIED || type == MSG_ESCAPED)
+        if (type == MSG_DAMAGE || type == MSG_BUILDING_DAMAGE || type == MSG_ITEM_TAKE || type == MSG_ITEM_GIVE || type == MSG_GROUND_TAKE || type == MSG_TRADE || type == MSG_ITEM_UNDO || type == MSG_ZONE_MODE || type == MSG_WORLD_STATE_REPORT || type == MSG_WORLD_BUILDING_REPORT || type == MSG_BOUNTY_CRIME || type == MSG_WORLD_CONTAINER || type == MSG_INVENTORY_REQUEST || type == MSG_HEAL || type == MSG_CARRIED || type == MSG_ESCAPED || type == MSG_AUTH_HANDOFF)
         {
             if (body.empty()) return;
             uint8_t target = body[0];

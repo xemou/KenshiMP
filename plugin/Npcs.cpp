@@ -24,8 +24,10 @@
 
 #include "Shared.h"
 #include "../core/LoadSharing.h"
+#include "../core/Authority.h"
 #include "CharSync.h"
 
+#include <algorithm>
 #include <map>
 #include <set>
 #include <vector>
@@ -38,14 +40,42 @@ namespace kmp {
 
 namespace
 {
-    const float INTEREST_RADIUS = 600.f;
-    const float DROP_RADIUS = 750.f;
+    // The zone belongs to one player (the host's, as long as the others are in its shared world) and reaches as far as
+    // that player's own render distance for people: the game's "npc range" (settings.cfg, 3250 by default). Whoever is
+    // in that zone sees the same people. The clients get the value from the host (MSG_ZONE_MODE), they never guess it.
+    const float DEFAULT_NPC_RANGE = 3250.f, MIN_NPC_RANGE = 600.f, MAX_NPC_RANGE = 6000.f;
+    float g_npcRange = 0;
+    float readGameNpcRange()
+    {
+        float v = DEFAULT_NPC_RANGE;
+        FILE* f = NULL;
+        if (fopen_s(&f, "settings.cfg", "r") == 0 && f)
+        {
+            char line[256];
+            while (fgets(line, sizeof(line), f))
+                if (strncmp(line, "npc range=", 10) == 0) { float x = (float)atof(line + 10); if (x > 0) v = x; break; }
+            fclose(f);
+        }
+        return v;
+    }
+    float interestRadius()
+    {
+        if (g_npcRange <= 0)   // host: our own setting (or the mod's override); client: until the host tells us
+        {
+            float v = g_cfg.npcRange > 0 ? (float)g_cfg.npcRange : (g_session.isHost() ? readGameNpcRange() : DEFAULT_NPC_RANGE);
+            g_npcRange = v < MIN_NPC_RANGE ? MIN_NPC_RANGE : (v > MAX_NPC_RANGE ? MAX_NPC_RANGE : v);
+            if (g_session.isHost()) log("NPC zone: people are shown out to %.0f units around each player (the game's npc range)", g_npcRange);
+        }
+        return g_npcRange;
+    }
+    float dropRadius() { return interestRadius() * 1.15f; }   // hysteresis: forgotten only once clearly outside
+    const int SPAWN_BUDGET = 25;             // new people announced per client per scan (closest first): a big zone fills in over a few seconds
     const float QUERY_MERGE = 40.f;          // skip area queries whose centre is this close to one done
     const DWORD STATE_PERIOD_MS = 50;       // scheduler tick; each NPC has its own LOD rate below
 
     // Level of detail, like a game server's entity tracker: close NPCs update often. Everything stays under
     // 100 ms (the scheduler runs every STATE_PERIOD_MS = 50 ms, so a period of 99 means "every second tick").
-    DWORD lodPeriod(float dist) { return dist < 250.f ? 50 : 99; }
+    DWORD lodPeriod(float dist) { return dist < 250.f ? 50 : (dist < 900.f ? 99 : (dist < 1800.f ? 250 : 500)); }
     const DWORD SCAN_PERIOD_MS = 1000;
     const DWORD LOOKS_PERIOD_MS = 3000;
     const DWORD CLEANUP_PERIOD_MS = 1000;
@@ -432,7 +462,7 @@ namespace
             float d = 1e30f;
             for (size_t i = 0; i < mine.size(); ++i)
                 if (mine[i].second) { float n = nearest(mine[i].second->getPosition(), centres); if (n < d) d = n; }
-            mode = shareMode(prev == g_clientMode.end() ? MODE_UNKNOWN : prev->second, d);
+            mode = shareMode(prev == g_clientMode.end() ? MODE_UNKNOWN : prev->second, d, interestRadius());
             if (g_forcedApart.count(client)) mode = MODE_APART;   // zone watch: the host's zone there never loaded
             if (prev == g_clientMode.end() || prev->second != mode)
                 log("load sharing: player %d is %s (%.0f units from us)", (int)client, mode == MODE_SHARED ? "in our world" : "on its own", d);
@@ -441,7 +471,7 @@ namespace
         {
             g_clientMode[client] = mode;
             if (mode == MODE_SHARED) g_lastZoneKeep = 0;   // client (back) in our world: load the zones around it now, not in up to 3 s
-            ByteWriter w; w.u8(client); w.u8((uint8_t)mode);
+            ByteWriter w; w.u8(client); w.u8((uint8_t)mode); w.u16((uint16_t)interestRadius());   // + the zone's reach (host's npc range)
             g_session.sendTo(client, MSG_ZONE_MODE, w.data);
         }
         return mode == MODE_SHARED;
@@ -487,7 +517,7 @@ namespace
             cs_localPositions(watch);
             std::set<Character*> wanted;
             g_diagQueries = g_diagFound = 0;
-            collectAround(watch, INTEREST_RADIUS, wanted);
+            collectAround(watch, interestRadius(), wanted);
             static DWORD lastDiag = 0;
             if (GetTickCount() - lastDiag > 10000)
             {
@@ -508,8 +538,19 @@ namespace
                     centres[0].x, centres[0].y, centres[0].z, npcs, bestName.c_str(), best);
             }
 
+            // Closest first, a limited number of new people per scan (the rest follow on the next scans).
+            std::vector<std::pair<float, Character*> > order;
             for (std::set<Character*>::iterator w = wanted.begin(); w != wanted.end(); ++w)
+                order.push_back(std::make_pair(nearest((*w)->getPosition(), watch), *w));
+            std::sort(order.begin(), order.end());
+            int spawned = 0;
+            for (size_t o = 0; o < order.size(); ++o)
             {
+                Character* wc = order[o].second;
+                std::set<Character*>::iterator w = wanted.find(wc);
+                std::map<Character*, Npc>::iterator known = g_npcs.find(*w);
+                if ((known == g_npcs.end() || !known->second.clients.count(client)) && spawned >= SPAWN_BUDGET) { wanted.erase(w); continue; }   // not yet: next scan
+                if (known == g_npcs.end() || !known->second.clients.count(client)) ++spawned;
                 std::map<Character*, Npc>::iterator it = g_npcs.find(*w);
                 if (it == g_npcs.end())
                 {
@@ -530,7 +571,7 @@ namespace
             for (std::map<Character*, Npc>::iterator it = g_npcs.begin(); it != g_npcs.end(); ++it)
             {
                 if (!it->second.clients.count(client) || wanted.count(it->first)) continue;
-                if (nearest(it->first->getPosition(), watch) > DROP_RADIUS)
+                if (nearest(it->first->getPosition(), watch) > dropRadius())
                 {
                     sendDespawnTo(client, it->second.id);
                     it->second.clients.erase(client);
@@ -619,7 +660,7 @@ namespace
         cs_localPositions(centres);
         if (centres.empty()) return true;    // nothing to wait for
         std::vector<uint32_t> ids;
-        chars_npcGhostsNear(centres, INTEREST_RADIUS, ids);   // what the host sends us (its interest radius)
+        chars_npcGhostsNear(centres, interestRadius(), ids);   // what the host sends us (its interest radius)
         return !ids.empty();
     }
 
@@ -714,6 +755,55 @@ namespace
 }
 
 // Test runs: what stands around our first character, in one line (see the autotest census in KenshiMP.cpp).
+// Test: the real NPCs the host sees around some points (the same search that decides which NPCs the clients get).
+void npcs_realAround(const std::vector<Ogre::Vector3>& centres, float radius, std::vector<Character*>& out)
+{
+    // the NPCs the host tracks (those it serves to its clients), whatever the area-query cache says
+    for (std::map<Character*, Npc>::iterator it = g_npcs.begin(); it != g_npcs.end(); ++it)
+    {
+        Character* c = it->second.h.getCharacter();
+        if (!c || c != it->first) continue;
+        for (size_t i = 0; i < centres.size(); ++i)
+            if (c->getPosition().distance(centres[i]) <= radius) { out.push_back(c); break; }
+    }
+}
+
+namespace
+{
+    bool npcAuthProbe(Character* c, float* x, float* y, float* z, float* hp, float* blood, int* flags)
+    {
+        __try
+        {
+            Ogre::Vector3 p = c->getPosition();
+            *x = p.x; *y = p.y; *z = p.z;
+            *hp = c->medical.getOverallHealthRating();
+            *blood = c->medical.blood;
+            *flags = (c->isDead() ? 1 : 0) | (c->medical.isUnconcious() ? 2 : 0);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+}
+
+void npcs_debugAuthority()
+{
+    if (!g_session.isHost()) return;
+    DWORD now = GetTickCount();
+    Lock l;
+    for (std::map<Character*, Npc>::iterator it = g_npcs.begin(); it != g_npcs.end(); ++it)
+    {
+        if (it->second.clients.empty()) continue;       // nobody has a copy: nothing to compare
+        Character* c = it->second.h.getCharacter();
+        float x, y, z, hp, bl; int fl;
+        if (c && npcAuthProbe(c, &x, &y, &z, &hp, &bl, &fl))
+        {
+            EntityState st; cs_captureState(c, it->second.id, st);
+            { static std::set<uint32_t> dumped; if (dumped.size() < 2 && (it->second.id == 0x00800008 || it->second.id == 0x00800011) && dumped.insert(it->second.id).second) cs_appearanceDump(c, it->second.id, "own"); }
+            log("auth: t=%u id=%08x role=own owner=0 x=%.1f y=%.1f z=%.1f hp=%.1f blood=%.1f fl=%d tmpl=%s app=%08x look=%s task=%d", (unsigned)now, it->second.id, x, y, z, hp, bl, fl, c->data ? c->data->stringID.c_str() : "-", hashBytes(cs_appearanceMsg(c, it->second.id)), cs_appearanceDigest(c).c_str(), (int)st.task);
+        }
+    }
+}
+
 std::string npcs_debugCensus()
 {
     std::vector<Ogre::Vector3> centres;
@@ -816,6 +906,72 @@ void npcs_tick(DWORD now)
     clientCleanup(false);
 }
 
+// ---------------------------------------------------------------- authority table (AUTHORITY_PLAN.md B + C)
+// The host owns the table: who simulates each entity that is not at its default owner (an NPC handed to a client).
+// It is sent whole to everybody when it changes and every AUTH_PERIOD_MS (a late joiner or a lost message heals itself).
+static AuthTable g_auth;
+static bool g_authDirty = false;
+static DWORD g_authLast = 0;
+static long g_authViolations = 0;
+static const DWORD AUTH_PERIOD_MS = 5000;
+
+uint8_t auth_owner(uint32_t id) { return g_auth.owner(id); }
+uint16_t auth_epoch(uint32_t id) { return g_auth.epoch(id); }
+size_t auth_size() { return g_auth.size(); }
+
+static void sendHandoff(uint8_t client, uint8_t action, uint32_t id)
+{
+    ByteWriter w; w.u8(client); w.u8(action); w.u32(id); w.u16(g_auth.epoch(id));
+    g_session.sendTo(client, MSG_AUTH_HANDOFF, w.data);
+}
+
+void auth_tick(DWORD now)
+{
+    if (!g_session.isHost() || !g_session.active()) return;
+    if (!g_authDirty && now - g_authLast < AUTH_PERIOD_MS) return;
+    g_authDirty = false; g_authLast = now;
+    ByteWriter w; g_auth.write(w);
+    g_session.send(MSG_AUTH_TABLE, w.data);
+}
+
+// Who sent this state for this entity? Anybody but its owner is a second simulation of it: count it (the plan's invariant).
+bool auth_checkSender(uint32_t id, uint8_t sender)
+{
+    uint8_t o = g_auth.owner(id);
+    if (o == sender) return true;
+    if (++g_authViolations <= 20 || g_authViolations % 200 == 0)
+        log("PROBLEM authority: state of %08x from player %d but its owner is %d (%ld so far)", id, (int)sender, (int)o, g_authViolations);
+    return false;
+}
+long auth_violations() { return g_authViolations; }
+
+void auth_onMessage(const NetEvent& e)
+{
+    if (e.msgType == MSG_AUTH_TABLE)
+    {
+        if (e.sender != HOST_ID || g_session.isHost()) return;
+        ByteReader r(e.body);
+        AuthTable t;
+        if (!t.read(r)) return;
+        if (!(t == g_auth)) log("authority table: %d exception(s) from the host", (int)t.size());
+        g_auth = t;
+        return;
+    }
+    if (e.msgType == MSG_AUTH_HANDOFF)
+    {
+        ByteReader r(e.body);
+        uint8_t target = r.u8(), action = r.u8(); uint32_t id = r.u32(); uint16_t epoch = r.u16();
+        if (!r.ok() || e.sender != HOST_ID || target != g_session.localId()) return;
+        chars_onHandoff(id, action, epoch);
+    }
+}
+
+void auth_onPlayerLeft(uint8_t id)
+{
+    int n = g_auth.dropOwner(id);
+    if (n) { g_authDirty = true; log("authority: %d entit%s of player %d dropped", n, n == 1 ? "y" : "ies", (int)id); }
+}
+
 // A client recruited one of our NPCs: it now lives on the client; remove ours everywhere.
 void npcs_onClaim(uint8_t client, const Bytes& body)
 {
@@ -830,7 +986,12 @@ void npcs_onClaim(uint8_t client, const Bytes& body)
         for (std::map<Character*, Npc>::iterator it = g_npcs.begin(); it != g_npcs.end(); ++it)
             if (it->second.id == id) { c = it->first; n = it->second; g_npcs.erase(it); break; }
     }
-    if (!c) return;
+    if (!c)
+    {
+        // Nothing of ours to hand over (already handed, or never replicated): the claimer keeps its copy, say so.
+        sendHandoff(client, HANDOFF_GONE, id);
+        return;
+    }
     // The claimer must actually be next to that NPC (recruiting happens face to face).
     {
         std::vector<Ogre::Vector3> centres;
@@ -840,13 +1001,17 @@ void npcs_onClaim(uint8_t client, const Bytes& body)
             Lock l;
             g_npcs[c] = n;                   // not handed over: keep replicating it
             log("refused NPC claim %08x from %s (not next to it)", id, playerName(client).c_str());
+            sendHandoff(client, HANDOFF_REFUSE, id);
             return;
         }
     }
     for (std::set<uint8_t>::iterator cl = n.clients.begin(); cl != n.clients.end(); ++cl)
         if (*cl != client) sendDespawnTo(*cl, id);
     if (n.h.getCharacter() == c) cs_destroy(c);
-    log("NPC %08x handed over to %s", id, playerName(client).c_str());
+    uint16_t ep = g_auth.assign(id, client);
+    g_authDirty = true;
+    log("NPC %08x handed over to %s (authority epoch %d)", id, playerName(client).c_str(), (int)ep);
+    sendHandoff(client, HANDOFF_GRANT, id);
     showMessage(TF("%s recruited an NPC.", playerName(client).c_str()));
 }
 
@@ -856,6 +1021,7 @@ void npcs_reset()
 {
     Lock l;
     g_npcs.clear();
+    g_npcRange = 0;   // read again (host: settings.cfg, client: the next host message)
     g_looksCursor = NULL;
     g_purgedAll = false;
     g_clientMode.clear();
@@ -880,6 +1046,11 @@ void npcs_onZoneMode(const NetEvent& e)
     ByteReader r(e.body);
     uint8_t target = r.u8(), mode = r.u8();
     if (!r.ok() || e.sender != HOST_ID || target != g_session.localId() || mode > MODE_SHARED) return;
+    if (r.remaining() >= 2)
+    {
+        float reach = (float)r.u16();
+        if (r.ok() && reach >= MIN_NPC_RANGE && reach <= MAX_NPC_RANGE && reach != g_npcRange) { g_npcRange = reach; log("NPC zone: the host shows people out to %.0f units", reach); }
+    }
     if (mode == g_zoneMode) return;
     bool entering = mode == MODE_SHARED;
     g_zoneMode = mode;
@@ -891,6 +1062,7 @@ void npcs_onZoneMode(const NetEvent& e)
 
 void npcs_onPlayerLeft(uint8_t id)
 {
+    auth_onPlayerLeft(id);
     g_clientMode.erase(id);
     g_zoneBadSince.erase(id);
     g_forcedApart.erase(id);

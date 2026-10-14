@@ -50,14 +50,16 @@ struct Config
     int backupSaves;       // host: backups kept per save (copied when a hosted game is ready), 0 = off
     std::string autotestLoad;  // test: save loaded automatically from the title screen
     bool autotest;             // test: scripted checks once another player is there (log "autotest:")
+    int npcRange;              // host: how far around a player the host's NPCs are shown to it (0 = the game's own "npc range", 3250 by default)
+    int autotestShots;         // test: save a frame every N seconds (kmp_shot_<role>_<n>.png)
     bool autotestCarry;        // test: carry a knocked-out ghost, then get knocked out and carried
     bool autotestGotoShop;     // test: the squad is moved next to the nearest shop (shop shelves in reach)
     std::string lobbyKeyName;
     Config() : mode("off"), address("127.0.0.1"), port(47000), name("Player"), faction("My Faction"),
                relation(0), ghostAI("none"), syncAppearance(true), syncEquipment(true), syncBuildings(true),
-               debugKeys(false), npcSync(true), strictMods(true), autoReconnect(true), pauseSync(true),
+               debugKeys(false), npcSync(true), strictMods(false), autoReconnect(true), pauseSync(true),
                renderSmoothing(true), weatherSync(true), lobbyKey(VK_F4), lobbyKeyName("F4"), language("auto"), playersOnMap(true),
-               tuneSpeedMatch(true), tuneTrail(true), tuneRepath(true), tuneUnblock(true), tuneOnScreen(true), ghostNoCollide(false), loadSharing(false), assaultHostility(false), playerNames(true), townSync(true), backupSaves(5), autotest(false), autotestGotoShop(false), autotestCarry(false) {}
+               tuneSpeedMatch(true), tuneTrail(true), tuneRepath(true), tuneUnblock(true), tuneOnScreen(true), ghostNoCollide(false), loadSharing(false), assaultHostility(false), playerNames(true), townSync(true), backupSaves(5), autotest(false), autotestGotoShop(false), autotestCarry(false), autotestShots(0), npcRange(0) {}
 };
 
 extern mp::Session g_session;
@@ -67,6 +69,9 @@ extern Config g_cfg;
 bool ready();
 
 void log(const char* fmt, ...);
+void problem(const char* key, const char* fmt, ...);   // a check that failed: "PROBLEM:" line in the log (once a minute per key), kept for the bug report
+std::vector<std::string> problems_recent();            // the last ones (bug report)
+bool mp_hooksOk();                                     // false: some game functions were not found, multiplayer stays off
 bool mp_worldLoaded();                   // a game is loaded (our squad exists)
 std::string mp_modList();                // "game <version>;mod1;mod2..." as checked at handshake
 std::string mp_configDir();              // %LOCALAPPDATA%\kenshi\KenshiMP\ (with the final backslash)
@@ -135,6 +140,19 @@ std::string chars_debugCarryGhost(Character* me);      // test: pick up the firs
 std::string chars_debugCarryState();                  // test: state of the ghosts we may have picked up
 std::string chars_debugKnockOutSelf(Character* me, float seconds);   // test: our character is knocked out
 std::string chars_debugHeldReport(Character* me);     // test: our characters held by another player
+std::string chars_debugTalk(Character* me);             // test: talk to the nearest NPC with dialogue
+std::string chars_debugTalkState();                   // test: what became of that conversation
+std::string chars_debugWoundSelf(Character* me);       // test: wound our character
+std::string chars_debugHealGhost(Character* me);       // test: first aid on the copy of the other player's character
+std::string chars_debugHealSelf(Character* me);        // test: control, first aid on our own character
+std::string chars_debugGhostMedical();                 // test: medical state of the player copy
+std::string chars_debugFleshSelf(Character* me);       // test: our wounded part
+void chars_debugShopView();                           // test: the shop inventory the trade window would show
+std::string chars_debugClaimNpc(Character* me);         // test (AUTHORITY_PLAN step C): claim the nearest host NPC copy
+void chars_debugAuthority();                          // test (AUTHORITY_PLAN step A): one 'auth:' log line per own character and per copy
+void chars_debugNpcCensus();                          // test: NPCs around us: copy or real, trader, dialogue
+bool chars_screenshot(const std::string& file);        // test: the game's frame saved to a PNG
+void chars_debugFocus(Character* c, float rightOffset, float forwardOffset = 0.f);   // test: camera on c, c drawn right of the interface windows
 std::string chars_debugPickLock(Character* me);       // test: order our caged character to pick the lock
 
 // Buildings.cpp
@@ -160,6 +178,16 @@ void npcs_onPlayerLeft(uint8_t id);
 void npcs_reset();                       // world reloaded / session ended
 void npcs_onZoneMode(const mp::NetEvent& e);   // client: the host says who simulates the world around us
 void npcs_onClaim(uint8_t client, const mp::Bytes& body);
+// Authority table (core/Authority.h; Npcs.cpp): who simulates each entity. Host writes, clients mirror.
+uint8_t auth_owner(uint32_t netId);
+uint16_t auth_epoch(uint32_t netId);
+size_t auth_size();
+void auth_tick(DWORD now);
+bool auth_checkSender(uint32_t netId, uint8_t sender);   // false (and logged) when somebody but the owner sent its state
+long auth_violations();
+void auth_onMessage(const mp::NetEvent& e);
+void auth_onPlayerLeft(uint8_t player);
+void chars_onHandoff(uint32_t netId, uint8_t action, uint16_t epoch);   // client: the host's answer to our claim
 bool npcs_ownWorld();                    // client: we simulate our own surroundings (load sharing, far from the host)
 bool npcs_clientOwnWorld(uint8_t client); // host: that client simulates its own surroundings
 
@@ -278,6 +306,7 @@ std::string towns_debugUnique();      // test: a unique NPC's id
 std::string towns_debugFarTown();     // test: "name;x,y,z" of a town 8000-20000 units away
 std::string towns_debugOverride();    // test: "townSid;overrideSid" for a far town that has another version
 std::vector<std::string> builds_debugCensus(float radius);   // test: furnished / empty structures around our first character
+void npcs_debugAuthority();                                 // test (AUTHORITY_PLAN step A): one 'auth:' log line per NPC the host serves
 std::string npcs_debugCensus();                               // test: local NPCs, host NPC ghosts, zone state around our first character
 std::string builds_debugShop();       // test: "sid;x;y;z" of the nearest shop building
 std::string builds_debugGotoShop();   // test: moves our squad next to it

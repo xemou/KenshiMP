@@ -92,6 +92,7 @@ namespace
           "Impossible de construire ici : un bâtiment d'un autre joueur gêne." },
         { "You cannot recruit another player's character.", "Vous ne pouvez pas recruter le personnage d'un autre joueur." },
         { "You cannot carry or cage another player's character.", "Vous ne pouvez pas porter ni encager le personnage d'un autre joueur." },
+        { "Multiplayer is off: this version of Kenshi is not supported (game functions not found). Your saves are untouched.", "Multijoueur désactivé : cette version de Kenshi n'est pas prise en charge (fonctions du jeu introuvables). Vos sauvegardes sont intactes." },
         { "Only a knocked-out character can be carried, caged or put to bed.", "Seul un personnage assommé peut être porté, mis en cage ou au lit." },
         { "Your character is being held and cannot receive orders.", "Votre personnage est retenu et ne peut pas recevoir d'ordres." },
         { "Your character picked the lock and got out of the cage!", "Votre personnage a crocheté la serrure et est sorti de la cage !" },

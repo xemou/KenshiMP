@@ -43,6 +43,9 @@
 #include <kenshi/Gear.h>
 #include <kenshi/Animation/AnimationClass.h>
 #include <kenshi/CameraClass.h>
+#include <kenshi/Dialogue.h>
+#include <kenshi/ShopTrader.h>
+#include <kenshi/Building/UseableStuff.h>
 #include <kenshi/Enums.h>
 #include <kenshi/gui/ScreenLabel.h>
 #include <ogre/OgreCamera.h>
@@ -51,6 +54,7 @@
 
 #include "Shared.h"
 #include "CharSync.h"
+#include "../core/Authority.h"
 #include "../core/Interp.h"
 #include "../core/MovementGuard.h"
 
@@ -72,10 +76,12 @@ namespace
     const DWORD SPAWN_PERIOD_MS = 5000;
     const DWORD LOOKS_PERIOD_MS = 1000;   // appearance / gear / stats change detection
     const float TELEPORT_DISTANCE = 15.f;
+    long g_tmFar = 0, g_tmMoving = 0, g_tmWanted = 0, g_tmNoSubject = 0, g_tmOrderFail = 0;   // task mirroring statistics (test)
+    const float NPC_TASK_RANGE = 45.f;    // a still world NPC this close to its owner's spot is sent to do the same task
     const float TASK_RANGE = 3.f;         // ghost must be this close to its owner's spot to mirror a task
     const float COMBAT_LEASH = 8.f;       // while fighting, only pull the ghost back if it drifts further
     const float MELEE_SANITY_RANGE = 30.f;  // generous: interpolation delay + lunges
-    const float SPAWN_RANGE = 2500.f;       // ghosts further than this from all our characters wait
+    const float SPAWN_RANGE = 3300.f;       // ghosts further than this from all our characters wait (= the host's NPC reach, 3250: everything it shows is made here too)
 
     // ------------------------------------------------------------------ SEH-guarded engine calls
     // (Functions containing __try cannot hold C++ objects with destructors.)
@@ -270,6 +276,11 @@ namespace
         __try { c->setName(*name); c->setNameTagVisible(true); return true; }
         __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
     }
+    int safeAroundBuildings(lektor<RootObject*>* out, const Ogre::Vector3* p, float r)
+    {
+        __try { ou->getObjectsWithinSphere(*out, *p, r, BUILDING, 64, NULL); return (int)out->size(); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+    }
     RootObject* safeSpawn(Faction* f, const Ogre::Vector3* p, GameData* tmpl, RootObjectContainer* container)
     {
         __try { return ou->theFactory->createRandomCharacter(f, *p, container, tmpl, NULL, 1.0f); }
@@ -335,7 +346,7 @@ namespace
         __try { return ou->destroy(c, false, "kenshimp"); }
         __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
     }
-    bool safeMirrorHealth(Character* c, const float* flesh, int n, float blood)
+    bool safeMirrorHealth(Character* c, const float* flesh, int n, float blood, const float* bandage = NULL, int nb = 0)
     {
         __try
         {
@@ -344,6 +355,7 @@ namespace
             {
                 MedicalSystem::HealthPartStatus* p = m.anatomy[i];
                 if (p->flesh != flesh[i]) { p->flesh = flesh[i]; p->updateDerivedHealths(); }
+                if (i < nb && p->bandaging != bandage[i]) p->bandaging = bandage[i];   // treated wounds show as treated, here too
             }
             m.blood = blood;
             return true;
@@ -439,7 +451,17 @@ namespace
             const std::string& name = b.lists[k].first;
             d->clearList(name);
             const std::vector<AppearanceBlob::Ref>& refs = b.lists[k].second;
-            for (size_t n = 0; n < refs.size(); ++n) d->addToList(name, refs[n].sid, refs[n].v0, refs[n].v1, refs[n].v2);
+            for (size_t n = 0; n < refs.size(); ++n)
+            {
+                // Races and body parts from a mod we do not have: skip the reference instead of handing the engine a name it cannot resolve.
+                if (!refs[n].sid.empty() && !dataOf(refs[n].sid))
+                {
+                    static std::set<std::string> told;
+                    if (told.size() < 50 && told.insert(refs[n].sid).second) log("appearance: '%s' (%s) is unknown here (missing mod?), skipped", refs[n].sid.c_str(), name.c_str());
+                    continue;
+                }
+                d->addToList(name, refs[n].sid, refs[n].v0, refs[n].v1, refs[n].v2);
+            }
         }
     }
 
@@ -646,7 +668,7 @@ namespace
         MedicalSystem& m = c->medical;
         s.health = m.getOverallHealthRating();
         s.blood = m.blood;
-        for (uint32_t i = 0; i < m.anatomy.size() && i < 32; ++i) s.flesh.push_back(m.anatomy[i]->flesh);
+        for (uint32_t i = 0; i < m.anatomy.size() && i < 32; ++i) { s.flesh.push_back(m.anatomy[i]->flesh); s.bandage.push_back(m.anatomy[i]->bandaging); }
 
         bool fighting = c->isInCombatMode(true, true);
         s.flags = (c->isDead() ? EntityState::DEAD : 0) | (m.isUnconcious() ? EntityState::UNCONSCIOUS : 0) |
@@ -724,12 +746,12 @@ namespace
     // ------------------------------------------------------------------ treatment of copies
     // First aid / doctoring given to the copy of somebody else's character changes nothing for good (the owner's
     // state overwrites the copy): what the care did is measured on the copy, sent to the owner, and applied there.
-    struct HealAcc { float d[32]; float blood; bool any; HealAcc() : blood(0), any(false) { for (int i = 0; i < 32; ++i) d[i] = 0; } };
+    struct HealAcc { float d[32], b[32], r[32]; float blood; bool any; HealAcc() : blood(0), any(false) { for (int i = 0; i < 32; ++i) d[i] = b[i] = r[i] = 0; } };
     std::map<uint32_t, HealAcc> g_heal;
     DWORD g_lastHealSend = 0;
     long g_healsSent = 0, g_healsApplied = 0;
 
-    bool safeApplyHeal(Character* c, const uint8_t* idx, const float* d, int n, float blood)
+    bool safeApplyHeal(Character* c, const uint8_t* idx, const float* d, const float* bd, const float* rg, int n, float blood)
     {
         __try
         {
@@ -741,6 +763,8 @@ namespace
                 float cap = p->maxHealth(), nf = p->flesh + d[i];
                 if (nf > cap) nf = cap > p->flesh ? cap : p->flesh;
                 if (nf > p->flesh) { p->flesh = nf; p->updateDerivedHealths(); }
+                if (bd[i] > 0) p->bandaging += bd[i];     // what first aid does: the part heals and stops bleeding from it
+                if (rg[i] > 0) p->juryRigging += rg[i];   // robot repair
             }
             if (blood > 0)
             {
@@ -757,16 +781,16 @@ namespace
     {
         Character* c = localByNetId(h.victimNetId);   // our squad member or (host) a world NPC
         if (!c || h.parts.empty() && h.blood <= 0) return;
-        uint8_t idx[32]; float d[32]; int n = 0;
-        for (size_t i = 0; i < h.parts.size() && n < 32; ++i) { idx[n] = h.parts[i].first; d[n] = h.parts[i].second; ++n; }
-        float before = 0, after = 0;
-        if (g_cfg.debugKeys && n > 0 && idx[0] < c->medical.anatomy.size()) before = c->medical.anatomy[idx[0]]->flesh;
-        bool ok = safeApplyHeal(c, idx, d, n, h.blood);
+        uint8_t idx[32]; float d[32], bd[32], rg[32]; int n = 0;
+        for (size_t i = 0; i < h.parts.size() && n < 32; ++i) { idx[n] = h.parts[i].idx; d[n] = h.parts[i].flesh; bd[n] = h.parts[i].bandage; rg[n] = h.parts[i].rig; ++n; }
+        float before = 0, after = 0, bandBefore = 0, bandAfter = 0;
+        if (g_cfg.debugKeys && n > 0 && idx[0] < c->medical.anatomy.size()) { before = c->medical.anatomy[idx[0]]->flesh; bandBefore = c->medical.anatomy[idx[0]]->bandaging; }
+        bool ok = safeApplyHeal(c, idx, d, bd, rg, n, h.blood);
         if (ok) ++g_healsApplied;
         if (g_cfg.debugKeys)
         {
-            if (n > 0 && idx[0] < c->medical.anatomy.size()) after = c->medical.anatomy[idx[0]]->flesh;
-            log("treatment received for %08x: %d part(s), blood +%.1f, first part flesh %.2f -> %.2f (%s)", h.victimNetId, n, h.blood, before, after, ok ? "applied" : "failed");
+            if (n > 0 && idx[0] < c->medical.anatomy.size()) { after = c->medical.anatomy[idx[0]]->flesh; bandAfter = c->medical.anatomy[idx[0]]->bandaging; }
+            log("treatment received for %08x: %d part(s), blood +%.1f, first part flesh %.2f -> %.2f, bandaging %.2f -> %.2f (%s)", h.victimNetId, n, h.blood, before, after, bandBefore, bandAfter, ok ? "applied" : "failed");
         }
     }
 
@@ -781,7 +805,8 @@ namespace
             if (a.any)
             {
                 HealMsg m; m.victimNetId = it->first; m.blood = a.blood;
-                for (int i = 0; i < 32; ++i) if (a.d[i] > 0.001f) m.parts.push_back(std::make_pair((uint8_t)i, a.d[i]));
+                for (int i = 0; i < 32; ++i)
+                    if (a.d[i] > 0.001f || a.b[i] > 0.001f || a.r[i] > 0.001f) { HealPart hp; hp.idx = (uint8_t)i; hp.flesh = a.d[i]; hp.bandage = a.b[i]; hp.rig = a.r[i]; m.parts.push_back(hp); }
                 ByteWriter w; w.u8(netIdOwner(it->first)); m.write(w);
                 g_session.send(MSG_HEAL, w.data);
                 ++g_healsSent;
@@ -796,8 +821,9 @@ namespace
     // Our character, knocked out, carried / caged / put to bed by another player: that player's game moves the
     // copy and sends us where our real character must be. It stays ours: we only follow, for as long as the messages
     // keep coming (3 s without one: let go).
-    struct HeldChar { uint8_t by; uint8_t state; Ogre::Vector3 pos; Ogre::Quaternion rot; int8_t floor; DWORD last, lastKo, pickUntil; bool escaping; };
+    struct HeldChar { uint32_t carrier; DWORD liftTry; DWORD liftedAt; uint8_t by; uint8_t state; Ogre::Vector3 pos; Ogre::Quaternion rot; int8_t floor; DWORD last, lastKo, pickUntil; bool escaping; };
     std::map<uint32_t, HeldChar> g_held;
+    std::map<uint32_t, DWORD> g_heldFarSince;   // carried flag set but body far from the carrier: since when
     long g_heldMessages = 0;
 
     bool safeKnockOut(Character* c, float seconds)
@@ -822,8 +848,14 @@ namespace
         }
         __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
     }
+    // The carrier's copy on our side picks our character up (the engine then shows it carrying, and moves it).
+    bool tryGhostLift(uint32_t carrier, Character* victim, const Ogre::Vector3* at);
+    float ghostDistanceTo(uint32_t ghostId, Character* c);
+    void dropByGhost(uint32_t carrier, Character* victim);
+    bool safeBeingCarried(Character* c) { __try { return c->isBeingCarried(); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; } }
     void releaseHeld(uint32_t id, Character* c, const HeldChar& h)
     {
+        if (c && h.carrier) dropByGhost(h.carrier, c);
         if (c) { Ogre::Vector3 p = h.pos; if (c->getPosition().distance(p) > 2.f) safeTeleport(c, &p, h.floor); }
         log("character %08x let go by %s", id, playerName(h.by).c_str());
     }
@@ -846,7 +878,7 @@ namespace
         if (it == g_held.end())
         {
             if (safeDead(c) || !safeUnconscious(c)) return;   // only a knocked-out character can be taken
-            HeldChar h; h.by = sender; h.state = m.state; h.last = h.lastKo = GetTickCount(); h.pickUntil = 0; h.floor = m.floor; h.escaping = false;
+            HeldChar h; h.by = sender; h.state = m.state; h.last = h.lastKo = GetTickCount(); h.pickUntil = 0; h.carrier = 0; h.liftTry = 0; h.liftedAt = 0; h.floor = m.floor; h.escaping = false;
             h.pos = Ogre::Vector3(m.x, m.y, m.z); h.rot = Ogre::Quaternion(m.qw, m.qx, m.qy, m.qz);
             it = g_held.insert(std::make_pair(m.netId, h)).first;
             showMessage(TF("%s is carrying your knocked-out character.", playerName(sender).c_str()));
@@ -854,6 +886,8 @@ namespace
         }
         else if (it->second.by != sender) return;   // the first one to take it keeps it
         HeldChar& h = it->second;
+        if (h.state == CarriedMsg::CARRIED && m.state != CarriedMsg::CARRIED && h.carrier) { dropByGhost(h.carrier, c); h.carrier = 0; h.liftedAt = 0; }
+        if (m.state == CarriedMsg::CARRIED && m.carrier) h.carrier = m.carrier;
         h.state = m.state; h.pos = Ogre::Vector3(m.x, m.y, m.z); h.rot = Ogre::Quaternion(m.qw, m.qx, m.qy, m.qz);
         h.floor = m.floor; h.last = GetTickCount();
         ++g_heldMessages;
@@ -866,19 +900,19 @@ namespace
         __try { return c->stats ? c->stats->getStat(STAT_LOCKPICKING, false) : 0.f; }
         __except (EXCEPTION_EXECUTE_HANDLER) { return 0.f; }
     }
-    // The cage the copy is in lets it go (our engine's own release of a prisoner).
-    bool safeFreeFromCage(Character* c)
-    {
-        __try
-        {
-            if (c->inSomething != IN_PRISON) return false;
-            Building* b = c->inWhat.getBuilding();
-            UseableStuff* us = b ? b->getUseableStuff() : NULL;
-            c->setPrisonMode(false, us);
-            return true;
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-    }
+    // The cage the copy is in lets it go (our engine's own release of a prisoner).
+    bool safeFreeFromCage(Character* c)
+    {
+        __try
+        {
+            if (c->inSomething != IN_PRISON) return false;
+            Building* b = c->inWhat.getBuilding();
+            UseableStuff* us = b ? b->getUseableStuff() : NULL;
+            c->setPrisonMode(false, us);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
     void startPick(uint32_t id, Character* c, HeldChar& h, DWORD now)
     {
         float skill = safeLockpicking(c);
@@ -903,7 +937,7 @@ namespace
         g_session.send(MSG_ESCAPED, w.data);
         showMessage(T("Your character picked the lock and got out of the cage!"));
     }
-    // Every frame: our carried characters follow the carrier's copy.
+    // Every frame: our carried characters follow the carrier's copy.
 
     void updateHeld(DWORD now)
     {
@@ -917,17 +951,55 @@ namespace
                 h.lastKo = now;
                 if (!safeUnconscious(c)) safeForceKo(c);
             }
-            if (h.pickUntil && now >= h.pickUntil && !h.escaping) resolvePick(it->first, c, h);
-            Ogre::Vector3 cur = c->getPosition();
+            if (h.pickUntil && now >= h.pickUntil && !h.escaping) resolvePick(it->first, c, h);
+            if (h.state == CarriedMsg::CARRIED && h.carrier)
+            {
+                if (safeBeingCarried(c))
+                {
+                    // The carrier's copy holds it: the engine moves it along (and draws it carried).
+                    if (!h.liftedAt) { h.liftedAt = now; log("character %08x is carried by the copy of %08x (engine carry)", it->first, h.carrier); }
+                    {   // pose check (a character that lies has its up axis near horizontal; standing = up.y near 1)
+                        static DWORD lastPose = 0;
+                        if (g_cfg.autotest && now - lastPose > 2000)
+                        {
+                            lastPose = now;
+                            Ogre::Quaternion q = c->getOrientation();
+                            Ogre::Vector3 up = q * Ogre::Vector3::UNIT_Y;
+                            float dist = ghostDistanceTo(h.carrier, c);
+                            log("carried pose: %08x up.y %.2f, unconscious %d, %.1f units from its carrier", it->first, up.y, (int)safeUnconscious(c), dist);
+                        }
+                    }
+                    // "Carried" in the engine's flags but not attached to the carrier (it walks off, we stay on the ground):
+                    // let it go and pick up again with the game's own pickup.
+                    float apart = ghostDistanceTo(h.carrier, c);
+                    if (apart > 10.f)
+                    {
+                        DWORD& fs = g_heldFarSince[it->first];
+                        if (!fs) { fs = now; ++it; continue; }
+                        if (now - fs < 1500) { ++it; continue; }
+                        fs = 0;
+                        log("carry: %08x is flagged carried but %.0f units from its carrier: picking it up again", it->first, apart);
+                        dropByGhost(h.carrier, c);
+                        h.liftedAt = 0; h.liftTry = 0;
+                    }
+                    else { g_heldFarSince.erase(it->first); ++it; continue; }
+                }
+                if (h.liftedAt) { h.liftedAt = 0; h.liftTry = now; }   // it slipped: we place it ourselves until the next try
+                if (now - h.liftTry > 3000) { h.liftTry = now; tryGhostLift(h.carrier, c, &h.pos); }
+            }
+            Ogre::Vector3 cur = c->getPosition();
             float d = cur.distance(h.pos);
             if (d > 12.f) safeTeleport(c, &h.pos, h.floor);
             else if (d > 0.05f) { Ogre::Vector3 np = cur + (h.pos - cur) * 0.5f; safeNudge(c, &np); }
             ++it;
         }
     }
+    // Which of our characters carries this copy (so its owner's game shows the carrier carrying it).
+    uint32_t carrierOf(Character* victim);
     void sendCarried(uint32_t id, int state, Character* c)
     {
         CarriedMsg m; m.netId = id; m.state = (uint8_t)state;
+        if (state == CarriedMsg::CARRIED) m.carrier = carrierOf(c);
         Ogre::Vector3 p = c->getPosition(); Ogre::Quaternion q = c->getOrientation();
         m.x = p.x; m.y = p.y; m.z = p.z; m.qx = q.x; m.qy = q.y; m.qz = q.z; m.qw = q.w;
         int fl = c->getFloor(); m.floor = (int8_t)(fl < 0 ? 0 : (fl > 20 ? 20 : fl));
@@ -992,7 +1064,9 @@ namespace
         int floorTries; int floorFor;   // floor corrections made for the owner's current floor
         Ogre::Vector3 knownPos;         // owner's last reported position, body or not (regroup)
         DWORD knownAt;                  // when (0: never)
-        Ghost() : knownPos(Ogre::Vector3::ZERO), knownAt(0), floorTries(0), floorFor(-1), hasPendingAppearance(false), hasPendingEquipment(false), hasLimbs(false), hasPendingStats(false), pendingHunger(-1.f), pendingRanged(-1),
+        EntitySpawn spawn; bool hasSpawn; // the spawn message, to create the body later when it could not be made (or was too far)
+        DWORD lastBodyTry; int bodyTries;
+        Ghost() : knownPos(Ogre::Vector3::ZERO), knownAt(0), hasSpawn(false), lastBodyTry(0), bodyTries(0), floorTries(0), floorFor(-1), hasPendingAppearance(false), hasPendingEquipment(false), hasLimbs(false), hasPendingStats(false), pendingHunger(-1.f), pendingRanged(-1),
                   combatTarget(NULL), mirroredTask(-1), lastSpeed(-1), mode(MOVE), intervalMs(100),
                   lastSnapT(0), lastMoveCmd(0), lastFrame(0), hasVisual(false), visualPos(Ogre::Vector3::ZERO),
                   visualRot(Ogre::Quaternion::IDENTITY), blend(0), lastDrawn(Ogre::Vector3::ZERO),
@@ -1024,7 +1098,7 @@ namespace
     std::map<uint32_t, Ghost> g_ghosts;
     int g_npcGhostsSpawned = 0;
     // Engine protection: a buggy or malicious peer cannot flood us with characters.
-    const int MAX_GHOSTS_PER_PLAYER = 400;   // squads are <= ~256; the host also streams NPCs
+    const int MAX_GHOSTS_PER_PLAYER = 1200;  // squads are <= ~256; the host also streams the NPCs of its whole zone (npc range)
 
     int ghostCount(uint8_t owner)
     {
@@ -1316,10 +1390,166 @@ namespace
         return total;
     }
 
+    bool safeGhostDrop(Character* carrier, Character* victim)
+    {
+        __try
+        {
+            if (carrier->getCarryingObject() == victim) carrier->dropCarriedObject(true, false);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    // The game's own way: the carrier picks the other up (Character::pickupObject, which calls victim->getPickedUp(carrier)):
+    // the engine then sets the carried state, the pose and the attachment to the carrier's body, as when an NPC carries.
+    std::map<uint32_t, int> g_directPickups;   // carrier -> direct pickups tried since it last held somebody
+    bool safePickup(Character* carrier, Character* victim)
+    {
+        __try
+        {
+            if (carrier->isCarryingSomething || carrier->isBeingCarried()) return false;
+            carrier->pickupObject(victim);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    bool tryGhostLift(uint32_t carrier, Character* victim, const Ogre::Vector3* at)
+    {
+        std::map<uint32_t, Ghost>::iterator g = g_ghosts.find(carrier);
+        if (g == g_ghosts.end()) return false;
+        Character* cc = g->second.h.getCharacter();
+        if (!cc || safeDead(cc) || safeUnconscious(cc)) return false;
+        if (g_directPickups[carrier] < 3)
+        {
+            ++g_directPickups[carrier];
+            bool picked = safePickup(cc, victim);
+            log("carry: the copy of %08x picks our character up (engine pickupObject, try %d) -> %s", carrier, g_directPickups[carrier], picked ? "called" : "refused");
+            if (picked) return true;
+        }
+        bool ok = safeOrder(cc, LIFT_PERSON_SNATCHING_ALLOWED, victim, at);
+        log("carry: the copy of %08x is told to lift our character -> %s", carrier, ok ? "ordered" : "refused");
+        return ok;
+    }
+    float ghostDistanceTo(uint32_t ghostId, Character* c)
+    {
+        std::map<uint32_t, Ghost>::iterator g = g_ghosts.find(ghostId);
+        Character* gc = g != g_ghosts.end() ? g->second.h.getCharacter() : NULL;
+        return gc ? gc->getPosition().distance(c->getPosition()) : -1.f;
+    }
+    void dropByGhost(uint32_t carrier, Character* victim)
+    {
+        g_directPickups.erase(carrier);
+        std::map<uint32_t, Ghost>::iterator g = g_ghosts.find(carrier);
+        if (g == g_ghosts.end()) return;
+        Character* cc = g->second.h.getCharacter();
+        if (cc) safeGhostDrop(cc, victim);
+    }
+    // The carrying character of one of our (host-side) copies: which of our characters holds it.
+    bool safeHolds(Character* lc, Character* victim)
+    {
+        __try { return lc->getCarryingObject() == victim; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    uint32_t carrierOf(Character* victim)
+    {
+        for (size_t i = 0; i < g_local.size(); ++i)
+            if (Character* lc = g_local[i].h.getCharacter()) if (safeHolds(lc, victim)) return g_local[i].id;
+        return 0;
+    }
+
+    // The shop counters of the town, as our game created them, carry a junk "shop owner" (a non-empty hand that points
+    // to nothing); on the host it is empty. The game's trade window only lists the counters without a valid owner (or
+    // owned by the trader), so the copy of a trader showed an empty shop. We empty it.
+    bool fixCounterOwner(Building* b)
+    {
+        __try
+        {
+            if (b->getSpecialFunction() != BF_SHOP) return false;
+            UseableStuff* us = b->getUseableStuff();
+            if (!us) return false;
+            hand none;
+            if (us->shopOwner == none || us->shopOwner.getRootObject()) return false;   // empty already, or a real owner
+            us->shopOwner = none;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    int fixShopOwnersAround(Character* c)
+    {
+        Ogre::Vector3 at = c->getPosition();
+        lektor<RootObject*> around;
+        if (!safeShelfQuery(&around, &at, 120.f)) return 0;
+        int n = 0;
+        for (uint32_t i = 0; i < around.size(); ++i) if (fixCounterOwner(static_cast<Building*>(around[i]))) ++n;
+        return n;
+    }
+    // A real trader's squad has a home town and a home building (its bar, its shop): that is how the game finds the
+    // shop counters for its trade window. The copy's squad has neither, so its window was empty. We give it the
+    // town and the building it stands in.
+    struct HomeLink { int did, shops; char home[80]; };
+    void linkHomeInner(Character* c, lektor<RootObject*>* around, HomeLink* hl)
+    {
+        Ownerships* o = c->getOwnerships();
+        ActivePlatoon* ap = c->getPlatoon();
+        if (!o || !ap) return;
+        if (o->_homeTown) { hl->did = 2; return; }                         // already has one
+        Building* counter = NULL; float best = 1e30f; Ogre::Vector3 at = c->getPosition();
+        for (uint32_t i = 0; i < around->size(); ++i)
+        {
+            Building* b = static_cast<Building*>((*around)[i]);
+            if (b->getSpecialFunction() != BF_SHOP) continue;
+            float d = b->getPosition().distance(at);
+            if (d < best) { best = d; counter = b; }
+        }
+        if (!counter) return;
+        TownBase* town = counter->getTown();
+        if (!town) return;
+        hand home = c->isIndoors();
+        if (!home.getBuilding()) home = hand(counter);
+        o->setHomeTown(town, SQ_RESIDENT);
+        o->setHomeBuilding(home, SQ_RESIDENT);
+        ap->setupTraderBuildings();
+        lektor<Building*> a; o->getBuildingsWithFunction(a, BF_SHOP); hl->shops = (int)a.size();
+        strncpy_s(hl->home, home.toString().c_str(), _TRUNCATE);
+        hl->did = 1;
+    }
+    bool safeLinkHome(Character* c, lektor<RootObject*>* around, HomeLink* hl)
+    {
+        __try { linkHomeInner(c, around, hl); return true; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    bool linkTraderHome(Character* c)   // true once the copy has a home
+    {
+        Ogre::Vector3 at = c->getPosition();
+        lektor<RootObject*> around;
+        if (!safeShelfQuery(&around, &at, 80.f)) return false;
+        HomeLink hl; memset(&hl, 0, sizeof(hl));
+        if (!safeLinkHome(c, &around, &hl)) { problem("shophome", "the shop of a trader could not be linked"); return false; }
+        if (hl.did == 1) log("trader copy '%s' linked to its shop: home building [%s], the game finds %d shop building(s) for it now", c->getName().c_str(), hl.home, hl.shops);
+        return hl.did != 0;
+    }
+    void fixShopOwners(DWORD now)
+    {
+        static DWORD last = 0;
+        if (now - last < 2000) return;
+        last = now;
+        for (std::map<uint32_t, Platoon*>::iterator it = g_traderSquads.begin(); it != g_traderSquads.end(); ++it)
+        {
+            std::map<uint32_t, Ghost>::iterator g = g_ghosts.find(it->first);
+            if (g == g_ghosts.end()) continue;
+            Character* c = g->second.h.getCharacter();
+            if (!c) continue;
+            linkTraderHome(c);
+            int n = fixShopOwnersAround(c);
+            static int logged = 0;
+            if (n && logged++ < 6) log("shop counters around trader copy '%s': %d owner(s) cleared (was junk)", c->getName().c_str(), n);
+        }
+    }
+
     void spawnGhost(uint8_t owner, const EntitySpawn& sp)
     {
         Ghost& g = g_ghosts[sp.netId];
         g.knownPos = Ogre::Vector3(sp.x, sp.y, sp.z); g.knownAt = GetTickCount();
+        g.spawn = sp; g.hasSpawn = true;
         if (g.h.getCharacter()) return;
 
         // Player squads go to the player's mirror faction, world NPCs to their real faction
@@ -1331,9 +1561,24 @@ namespace
         Faction* f = worldNpc ? ou->factionMgr->getFactionByStringID(sp.factionSid) : factionFor(owner);
         if (worldNpc && f && (f->isThePlayer() || f == ou->player->getFaction())) f = NULL;
         GameData* tmpl = dataOf(sp.gameDataName);
+        // Tolerant to other mod lists: a faction or a character template from a mod we do not have is replaced by the
+        // nearest thing we do have (the sender's mirror faction, one of our own characters' template) instead of
+        // dropping the character; its looks, gear and name still come from the owner.
+        if (worldNpc && !f)
+        {
+            f = factionFor(owner);
+            if (f) { static int n = 0; if (n++ < 10) log("faction '%s' of %08x is unknown here (missing mod?): using the sender's faction", sp.factionSid.c_str(), sp.netId); }
+        }
+        if (!tmpl && sp.kind == KIND_CHARACTER)
+        {
+            for (size_t i = 0; i < g_local.size() && !tmpl; ++i)
+                if (Character* lc = g_local[i].h.getCharacter()) tmpl = lc->data;
+            if (tmpl) { static int n = 0; if (n++ < 10) log("template '%s' of %08x is unknown here (missing mod?): using '%s'", sp.gameDataName.c_str(), sp.netId, tmpl->stringID.c_str()); }
+        }
         if (!f || !tmpl)
         {
             log("cannot spawn ghost %08x (template '%s', faction '%s')", sp.netId, sp.gameDataName.c_str(), sp.factionSid.c_str());
+            problem("spawn", "a character of the other player(s) could not be created here (template '%s'): a mod they use may be missing or different", sp.gameDataName.c_str());
             return;
         }
 
@@ -1358,7 +1603,30 @@ namespace
         if (!squad) { trader = false; squad = ghostSquadFor(owner, f, pos); }
         if (!squad) { log("no ghost squad for player %d", (int)owner); return; }
         Character* c = static_cast<Character*>(safeSpawn(f, &pos, tmpl, squad));
-        if (!c) { log("factory returned no character for %08x", sp.netId); return; }
+        if (!c && sp.kind == KIND_CHARACTER && g.bodyTries >= 2)
+        {
+            // The factory keeps refusing this template (a unique character the world believes exists elsewhere, a template
+            // that needs its own squad...): make it from one of our own characters' template so it is at least there,
+            // dressed and named like the original (its looks and gear arrive next). Better than an invisible person.
+            // The template comes from a world NPC copy that was made fine (a generic one, never one of our own characters'
+            // data: creating from that adds a character to our own squad, in a loop).
+            GameData* alt = NULL;
+            for (std::map<uint32_t, Ghost>::iterator o = g_ghosts.begin(); o != g_ghosts.end() && !alt; ++o)
+            {
+                if (!isNpcNetId(o->first) || o->first == sp.netId) continue;
+                Character* oc = o->second.h.getCharacter();
+                if (oc && oc->data && oc->data != tmpl && !oc->data->stringID.empty()) alt = oc->data;
+            }
+            static int madeFallback = 0;
+            if (alt && madeFallback < 60)
+            {
+                c = static_cast<Character*>(safeSpawn(f, &pos, alt, squad));
+                if (c) ++madeFallback;
+                static int told = 0;
+                if (c && told++ < 8) log("template '%s' of %08x is refused by the factory here: made from '%s' instead", sp.gameDataName.c_str(), sp.netId, alt->stringID.c_str());
+            }
+        }
+        if (!c) { static int shown = 0; if (shown++ < 8) log("factory returned no character for %08x (will try again)", sp.netId); return; }
         if (trader)
         {
             int isT = -1, vend = -1, platT = -1;
@@ -1426,6 +1694,8 @@ namespace
         g.knownPos = Ogre::Vector3(s.x, s.y, s.z); g.knownAt = GetTickCount();
         Character* c = g.h.getCharacter();
         if (!c) return;
+        if (g_cfg.debugKeys && !isNpcNetId(s.netId) && g.last.flags != s.flags)
+            log("ghost %08x: owner flags %d -> %d (received)", s.netId, (int)g.last.flags, (int)s.flags);
         g.last = s;
 
         Snapshot snap;
@@ -1451,7 +1721,7 @@ namespace
         g.mode = Ghost::MOVE;
 
         // --- health: exact per-part mirror (limping, crippled arms, bleeding look...)
-        if (!s.flesh.empty() && !safeMirrorHealth(c, &s.flesh[0], (int)s.flesh.size(), s.blood))
+        if (!s.flesh.empty() && !safeMirrorHealth(c, &s.flesh[0], (int)s.flesh.size(), s.blood, s.bandage.empty() ? NULL : &s.bandage[0], (int)s.bandage.size()))
             log("health mirror failed on %08x", s.netId);
 
         bool ownerDead = (s.flags & EntityState::DEAD) != 0, ownerKO = (s.flags & EntityState::UNCONSCIOUS) != 0;
@@ -1514,14 +1784,36 @@ namespace
         }
 
         // --- tasks: build, operate a machine, sleep, sit... (whitelist)
-        if (s.task != 0xFFFF && isMirroredTask(s.task) && dist < TASK_RANGE && s.vx * s.vx + s.vz * s.vz < 1.f)
+        // A player's ghost must stand on its owner's exact spot (an order would otherwise walk it away from the owner's path).
+        // A world NPC is not steered by us when it is still: it may be a few steps from its chair or machine, the order
+        // sends it there and the engine sits it down (it stayed standing at the table before: 3 units is a hand's breadth).
+        const float taskRange = isNpcNetId(s.netId) ? NPC_TASK_RANGE : TASK_RANGE;
+        if (s.task != 0xFFFF && isMirroredTask(s.task))
+        {   // why a whitelisted task is not copied (test statistics, logged with the authority dump)
+            if (dist >= taskRange) ++g_tmFar; else if (s.vx * s.vx + s.vz * s.vz >= 1.f) ++g_tmMoving; else ++g_tmWanted;
+        }
+        if (s.task != 0xFFFF && isMirroredTask(s.task) && dist < taskRange && s.vx * s.vx + s.vz * s.vz < 1.f)
         {
             g.mode = Ghost::TASK;
             if ((int)s.task != g.mirroredTask || s.taskSubject != g.mirroredSubject)
             {
                 RootObject* subject = resolveTargetRef(s.taskSubject);
                 Ogre::Vector3 loc(s.tx, s.ty, s.tz);
-                if ((subject || s.taskSubject.kind == TargetRef::NONE) && safeOrder(c, s.task, subject, &loc))
+                if (!subject && s.taskSubject.kind != TargetRef::NONE) { ++g_tmNoSubject; if (g_tmNoSubject <= 6)
+                {
+                    std::string near_;
+                    lektor<RootObject*> around; Ogre::Vector3 sp(s.taskSubject.x, s.taskSubject.y, s.taskSubject.z);
+                    int n = safeAroundBuildings(&around, &sp, 12.f);
+                    for (int i = 0; i < n && i < 6; ++i)
+                    {
+                        Building* bb = static_cast<Building*>(around[i]);
+                        char b[120]; sprintf_s(b, "%s@%.1f ", bb && bb->data ? bb->data->stringID.c_str() : "?", bb ? bb->getPosition().distance(sp) : -1.f); near_ += b;
+                    }
+                    log("task %d of %08x: subject kind %d '%s' at (%.0f,%.0f,%.0f) not found here; %d building(s) within 12 units: %s", (int)s.task, s.netId, (int)s.taskSubject.kind, s.taskSubject.sid.c_str(), sp.x, sp.y, sp.z, n, near_.c_str());
+                } }
+                bool orderOk = (subject || s.taskSubject.kind == TargetRef::NONE) ? safeOrder(c, s.task, subject, &loc) : false;
+                if ((subject || s.taskSubject.kind == TargetRef::NONE) && !orderOk) ++g_tmOrderFail;
+                if (orderOk)
                 {
                     if (g_cfg.debugKeys) log("ghost %08x copies its owner's task %d", s.netId, (int)s.task);
                     g.mirroredTask = s.task;
@@ -1922,6 +2214,7 @@ namespace
         for (size_t i = 0; i < recreate.size(); ++i)
         {
             ++g_recreated;
+            problem("recreate", "a character copy could not be placed and was created again (%ld so far)", g_recreated);
             if (g_cfg.debugKeys) log("ghost %08x recreated (its body could not be placed)", recreate[i]);
             despawnGhost(recreate[i]);
         }
@@ -1985,7 +2278,22 @@ RootObject* resolveTargetRef(const TargetRef& t)
         return best;
     }
     case TargetRef::WORLD_BUILDING:
-        return builds_findWorld(t.sid, t.x, t.y, t.z);
+    {
+        if (Building* exact = builds_findWorld(t.sid, t.x, t.y, t.z)) return exact;
+        // Two worlds furnish the same room a little differently (a chair or a machine a few steps off): the nearest
+        // building of the same kind around that spot will do (a ghost uses the table next to it, not the exact one).
+        lektor<RootObject*> around; Ogre::Vector3 p(t.x, t.y, t.z);
+        int n = safeAroundBuildings(&around, &p, 14.f);
+        Building* best = NULL; float bestD = 1e30f;
+        for (int i = 0; i < n; ++i)
+        {
+            Building* b = static_cast<Building*>(around[i]);
+            if (!b || !b->data || b->data->stringID != t.sid) continue;
+            float d = b->getPosition().distance(p);
+            if (d < bestD) { bestD = d; best = b; }
+        }
+        return best;
+    }
     }
     return NULL;
 }
@@ -2017,7 +2325,12 @@ std::string chars_debugCarryGhost(Character* me)
         char b[160]; sprintf_s(b, "order Lift person on ghost %08x, %.0f units away -> %s", it->first, me->getPosition().distance(at), ok ? "given" : "failed");
         return b;
     }
-    return "no knocked-out ghost of another player";
+    {
+        std::string seen = "no knocked-out ghost of another player; ghosts and their flags: ";
+        for (std::map<uint32_t, Ghost>::iterator it = g_ghosts.begin(); it != g_ghosts.end(); ++it)
+            if (!isNpcNetId(it->first)) { char b[60]; sprintf_s(b, "%08x=%d ", it->first, (int)it->second.last.flags); seen += b; }
+        return seen;
+    }
 }
 
 // Test: what became of the ghost we picked up (engine state, and what its owner was told).
@@ -2044,14 +2357,14 @@ std::string chars_debugKnockOutSelf(Character* me, float seconds)
     return b;
 }
 
-// Test: the player orders our (caged) character to pick the lock.
-std::string chars_debugPickLock(Character* me)
-{
-    Ogre::Vector3 at = me->getPosition();
-    bool ok = safeOrder(me, PICK_LOCK, NULL, &at);
-    return ok ? "order Pick lock given" : "order failed";
-}
-
+// Test: the player orders our (caged) character to pick the lock.
+std::string chars_debugPickLock(Character* me)
+{
+    Ogre::Vector3 at = me->getPosition();
+    bool ok = safeOrder(me, PICK_LOCK, NULL, &at);
+    return ok ? "order Pick lock given" : "order failed";
+}
+
 // Test: are our characters being held by another player, and where are they now.
 std::string chars_debugHeldReport(Character* me)
 {
@@ -2270,13 +2583,36 @@ void chars_releaseGhost(uint32_t id)
 // never removed by the client-side world cleanup.
 static std::map<Character*, hand> g_claimed;
 
+// Hand-off with acknowledgement (AUTHORITY_PLAN step C): a claim is repeated until the host answers
+// (MSG_AUTH_HANDOFF), so a lost or refused claim cannot leave the NPC simulated twice for good.
+struct AwaitGrant { int tries; DWORD last; };
+static std::map<uint32_t, AwaitGrant> g_awaitGrant;
+static const DWORD GRANT_RETRY_MS = 3000;
+static const int GRANT_TRIES = 5;
+
+static void sendClaim(uint32_t id)
+{
+    ByteWriter w; w.u32(id);
+    g_session.sendTo(HOST_ID, MSG_NPC_CLAIM, w.data);
+}
+
 void chars_claimNpc(uint32_t id, Character* c)
 {
     chars_releaseGhost(id);
     if (c) { Lock l; g_claimed[c] = hand(c); }
-    ByteWriter w; w.u32(id);
-    g_session.sendTo(HOST_ID, MSG_NPC_CLAIM, w.data);
+    sendClaim(id);
+    AwaitGrant a; a.tries = 1; a.last = GetTickCount();
+    g_awaitGrant[id] = a;
     log("world NPC %08x claimed (now simulated here)", id);
+}
+
+void chars_onHandoff(uint32_t id, uint8_t action, uint16_t epoch)
+{
+    std::map<uint32_t, AwaitGrant>::iterator it = g_awaitGrant.find(id);
+    if (it == g_awaitGrant.end()) return;
+    if (action == HANDOFF_REFUSE) { log("host refused our claim of %08x (try %d), will ask again", id, it->second.tries); return; }
+    log("host %s the claim of %08x (authority epoch %d, %d try/tries)", action == HANDOFF_GRANT ? "granted" : "has nothing left of", id, (int)epoch, it->second.tries);
+    g_awaitGrant.erase(it);
 }
 
 // Carry / cage orders are often given from afar, but the host only hands an NPC over to a client
@@ -2303,6 +2639,14 @@ void chars_claimWhenNear(uint32_t id, Character* c)
 
 static void processPendingClaims(DWORD now)
 {
+    for (std::map<uint32_t, AwaitGrant>::iterator a = g_awaitGrant.begin(); a != g_awaitGrant.end();)
+    {
+        if (now - a->second.last < GRANT_RETRY_MS) { ++a; continue; }
+        if (a->second.tries >= GRANT_TRIES) { log("PROBLEM authority: no grant for the claim of %08x after %d tries, giving up", a->first, a->second.tries); g_awaitGrant.erase(a++); continue; }
+        ++a->second.tries; a->second.last = now;
+        sendClaim(a->first);
+        ++a;
+    }
     for (std::map<uint32_t, DWORD>::iterator it = g_pendingClaims.begin(); it != g_pendingClaims.end();)
     {
         std::map<uint32_t, Ghost>::iterator g = g_ghosts.find(it->first);
@@ -2338,6 +2682,59 @@ Character* chars_byNetId(uint32_t id)
 
 // --- helpers shared with Npcs.cpp (CharSync.h) ---
 void cs_captureState(Character* c, uint32_t id, EntityState& s) { captureState(c, id, s); }
+
+// Test: the appearance data as five digests (strings, ints, floats, bools, lists), to see which part differs between an
+// owner and its copy: "s12:1a2b3c4d i8:... f30:... b2:... l5:..." (count : hash).
+// Test: every key of the appearance data, one log line per kind, for a few characters (owner vs copy comparison).
+static void dumpChunks(uint32_t id, const char* role, const char* kind, const std::string& t)
+{
+    for (size_t pos = 0; pos < t.size() || pos == 0; pos += 360)
+    {
+        log("look-dump %08x %s %s: %s", id, role, kind, t.substr(pos, 360).c_str());
+        if (t.size() <= 360) break;
+    }
+}
+void cs_appearanceDump(Character* c, uint32_t id, const char* role)
+{
+    AppearanceBlob b = captureAppearance(c->getAppearanceData());
+    std::string t;
+    char tmp[200];
+    for (size_t k = 0; k < b.s.size(); ++k) t += b.s[k].first + "=" + b.s[k].second + " | ";
+    dumpChunks(id, role, "strings", t);
+    t.clear();
+    for (size_t k = 0; k < b.i.size(); ++k) { sprintf_s(tmp, "%s=%d | ", b.i[k].first.c_str(), (int)b.i[k].second); t += tmp; }
+    dumpChunks(id, role, "ints", t);
+    t.clear();
+    for (size_t k = 0; k < b.f.size(); ++k) { sprintf_s(tmp, "%s=%.3f | ", b.f[k].first.c_str(), b.f[k].second); t += tmp; }
+    dumpChunks(id, role, "floats", t);
+    t.clear();
+    for (size_t k = 0; k < b.b.size(); ++k) { sprintf_s(tmp, "%s=%d | ", b.b[k].first.c_str(), (int)b.b[k].second); t += tmp; }
+    dumpChunks(id, role, "bools", t);
+    t.clear();
+    for (size_t k = 0; k < b.lists.size(); ++k)
+    {
+        t += b.lists[k].first + "=[";
+        for (size_t n = 0; n < b.lists[k].second.size(); ++n) { sprintf_s(tmp, "%s(%d,%d,%d) ", b.lists[k].second[n].sid.c_str(), (int)b.lists[k].second[n].v0, (int)b.lists[k].second[n].v1, (int)b.lists[k].second[n].v2); t += tmp; }
+        t += "] | ";
+    }
+    dumpChunks(id, role, "lists", t);
+}
+
+std::string cs_appearanceDigest(Character* c)
+{
+    AppearanceBlob b = captureAppearance(c->getAppearanceData());
+    char out[160];
+    AppearanceBlob p;
+    ByteWriter ws, wi, wf, wb, wl;
+    p = AppearanceBlob(); p.s = b.s; p.write(ws);
+    p = AppearanceBlob(); p.i = b.i; p.write(wi);
+    p = AppearanceBlob(); p.f = b.f; p.write(wf);
+    p = AppearanceBlob(); p.b = b.b; p.write(wb);
+    p = AppearanceBlob(); p.lists = b.lists; p.write(wl);
+    sprintf_s(out, "s%d:%08x i%d:%08x f%d:%08x b%d:%08x l%d:%08x", (int)b.s.size(), hashBytes(ws.data), (int)b.i.size(), hashBytes(wi.data), (int)b.f.size(), hashBytes(wf.data),
+              (int)b.b.size(), hashBytes(wb.data), (int)b.lists.size(), hashBytes(wl.data));
+    return out;
+}
 
 Bytes cs_appearanceMsg(Character* c, uint32_t id)
 {
@@ -2585,11 +2982,12 @@ void chars_preFrame()
 // screen and far away.
 namespace
 {
-    const float NAME_MAX_DISTANCE = 300.f;   // from the camera
-    const float NAME_HEAD_HEIGHT = 2.3f;     // above the character's position, if its tag gives none
+    const float NAME_MAX_DISTANCE = 1500.f;  // from the camera (was 300: a friend further away could not be found)
+    const float NAME_HEAD_HEIGHT = 16.f;     // above the character's position: a human is ~14 world units tall (measured on the game's frames: 2.3 put the label at the feet)
     const int NAME_W = 320, NAME_H = 26;
 
     struct NameLabel { MyGUI::EditBox* w; std::string text; bool shown; NameLabel() : w(NULL), shown(false) {} };
+    long g_nameFrames = 0, g_nameDrawn = 0, g_nameNoCam = 0, g_nameOff = 0, g_nameBehind = 0, g_nameFar = 0; int g_nameLastX = -1, g_nameLastY = -1; float g_nameCam[3] = {0,0,0}, g_nameAt[3] = {0,0,0}, g_nameV[3] = {0,0,0}, g_nameFeet[3] = {0,0,0}, g_nameP[2] = {0,0}, g_nameTag = 0; int g_nameViewW = 0, g_nameViewH = 0; int g_nameFeetPx[2] = {0,0}, g_nameAnchorPx[2] = {0,0}, g_nameBoxPx[2] = {0,0};
     std::map<uint32_t, NameLabel> g_names;
     bool g_namesFailed = false;
 
@@ -2603,24 +3001,75 @@ namespace
         }
         __except (EXCEPTION_EXECUTE_HANDLER) { return NULL; }
     }
+    bool writeShotInner(const char* file)
+    {
+        Ogre::RenderSystem* rs = Ogre::Root::getSingleton().getRenderSystem();
+        if (!rs) return false;
+        Ogre::RenderSystem::RenderTargetIterator it = rs->getRenderTargetIterator();
+        while (it.hasMoreElements())
+        {
+            Ogre::RenderTarget* t = it.getNext();
+            if (t && t->isPrimary()) { t->writeContentsToFile(file); return true; }
+        }
+        return false;
+    }
+    bool safeWriteShot(const char* file)
+    {
+        __try { return writeShotInner(file); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
     bool safeCameraMatrices(Ogre::Camera* cam, Ogre::Matrix4* view, Ogre::Matrix4* proj, Ogre::Vector3* at)
     {
         __try { *view = cam->getViewMatrix(); *proj = cam->getProjectionMatrix(); *at = cam->getDerivedPosition(); return true; }
         __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
     }
-    // Height of the game's own name tag above the character (ScreenLabel::trackingOffset), when sane.
-    float safeTagHeight(Character* c)
+    // Diagnostic: the camera's position by every route the engine offers (to find the one that is in world coordinates).
+    bool safeCamDiag(float* out)
     {
         __try
         {
+            CameraClass* cc = ou->player->camera;
+            Ogre::Vector3 a = cc->camera->getPosition(), b = cc->camera->getDerivedPosition(), c = cc->getCameraPos();
+            out[0] = a.x; out[1] = a.y; out[2] = a.z; out[3] = b.x; out[4] = b.y; out[5] = b.z; out[6] = c.x; out[7] = c.y; out[8] = c.z;
+            Ogre::SceneNode* n = cc->getCameraNode();
+            if (n) { Ogre::Vector3 d = n->_getDerivedPosition(); out[9] = d.x; out[10] = d.y; out[11] = d.z; } else out[9] = out[10] = out[11] = -1;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    // The engine renders in a re-based space (its camera sits near the origin, measured: derived position (7,1617,-126)
+    // while the camera is at (-50972,1617,2807) in world coordinates): the offset between both is what turns a world
+    // position into the position the view matrix understands.
+    bool safeWorldCamPos(Ogre::Vector3* out)
+    {
+        __try { *out = ou->player->camera->getCameraPos(); return true; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    // Height of the game's own name tag above the character (ScreenLabel::trackingOffset), when sane.
+    float rawTagHeight(Character* c, bool* have)
+    {
+        *have = false;
+        __try
+        {
             ScreenLabel* tag = (ScreenLabel*)c->nameTag;
-            if (tag)
-            {
-                float y = tag->trackingOffset.y;
-                if (y > 0.5f && y < 50.f) return y;
-            }
+            if (tag) { float y = tag->trackingOffset.y; if (y > 0.05f && y < 200.f) { *have = true; return y; } }
         }
         __except (EXCEPTION_EXECUTE_HANDLER) {}
+        return 0.f;
+    }
+    float g_ownTagHeight = 0;        // the game's own tag height on one of our characters (same world units as the positions)
+    float safeTagHeight(Character* c)
+    {
+        bool have;
+        float y = rawTagHeight(c, &have);
+        if (have) return y;
+        if (g_ownTagHeight > 0.05f) return g_ownTagHeight;   // a copy has no tag of its own: use what the game gives our characters
+        for (size_t i = 0; i < g_local.size(); ++i)
+            if (Character* lc = g_local[i].h.getCharacter())
+            {
+                float t = rawTagHeight(lc, &have);
+                if (have) { g_ownTagHeight = t; log("player names: the game's own name tag sits %.2f units above a character", t); return t; }
+            }
         return NAME_HEAD_HEIGHT;
     }
 
@@ -2633,10 +3082,14 @@ namespace
             MyGUI::EditBox* w = gui->createWidget<MyGUI::EditBox>("Kenshi_WordWrapEmpty",
                 MyGUI::IntCoord(0, 0, NAME_W, NAME_H), MyGUI::Align::Default, "Main");
             if (!w) return NULL;
+            // Set up like the chat history (which draws fine): multi-line + word wrap, a visible base colour.
+            w->setEditMultiLine(true);
+            w->setEditWordWrap(true);
             w->setEditReadOnly(true);
-            w->setEditMultiLine(false);
-            w->setTextAlign(MyGUI::Align::Center);
+            w->setTextAlign(MyGUI::Align::Center | MyGUI::Align::Bottom);
             w->setTextShadow(true);
+            w->setTextColour(MyGUI::Colour(1.f, 1.f, 1.f));
+            w->setAlpha(1.f);
             w->setNeedMouseFocus(false);       // never steals clicks from the game
             w->setNeedKeyFocus(false);
             w->setVisible(false);
@@ -2657,6 +3110,484 @@ namespace
     }
 }
 
+// Test: the NPCs around our first character, as this game sees them: name, replicated copy or real, trader, has dialogue
+// (compare the lines of the two games: the host's real NPCs against the client's copies).
+namespace
+{
+    bool isOurSquad(Character* c) { for (size_t i = 0; i < g_local.size(); ++i) if (g_local[i].h.getCharacter() == c) return true; return false; }
+    bool safeNpcProbe(Character* c, int* trader, int* dialogue, int* indoors, int* items)
+    {
+        __try
+        {
+            *trader = c->isATrader() ? 1 : 0;
+            *dialogue = (c->dialogue && c->dialogue->hasDialogue_Accurate()) ? 1 : 0;
+            *indoors = c->isIndoors().getBuilding() ? 1 : 0;
+            *items = c->inventory ? (int)c->inventory->getNumItems() : -1;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+}
+// Step A of AUTHORITY_PLAN.md: one line per entity we know, so the two games' logs can be compared offline
+// (tools: tests/harness/authority_diff.ps1). Same PC = same GetTickCount clock in both logs.
+namespace
+{
+    bool authProbe(Character* c, float* x, float* y, float* z, float* hp, float* blood, int* flags)
+    {
+        __try
+        {
+            Ogre::Vector3 p = c->getPosition();
+            *x = p.x; *y = p.y; *z = p.z;
+            *hp = c->medical.getOverallHealthRating();
+            *blood = c->medical.blood;
+            *flags = (c->isDead() ? 1 : 0) | (c->medical.isUnconcious() ? 2 : 0);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+}
+// Test (AUTHORITY_PLAN step C): claim the nearest host NPC copy within 45 units, the way recruiting / carrying does.
+std::string chars_debugClaimNpc(Character* me)
+{
+    if (!me) return "no character";
+    Character* best = NULL; uint32_t bid = 0; float bd = 45.f;
+    for (std::map<uint32_t, Ghost>::iterator g = g_ghosts.begin(); g != g_ghosts.end(); ++g)
+    {
+        if (!isNpcNetId(g->first)) continue;
+        Character* c = g->second.h.getCharacter();
+        if (!c) continue;
+        float d = c->getPosition().distance(me->getPosition());
+        if (d < bd) { bd = d; best = c; bid = g->first; }
+    }
+    if (!best) return "no host NPC within 45 units";
+    chars_claimWhenNear(bid, best);
+    char b[96]; sprintf_s(b, "claiming %08x (%.0f units away)", bid, bd);
+    return b;
+}
+
+void chars_debugAuthority()
+{
+    DWORD now = GetTickCount();
+    { static DWORD lastBl = 0;
+      if (now - lastBl > 10000)
+      {
+          lastBl = now;
+          int bodiless = 0, withBody = 0; std::string sample;
+          for (std::map<uint32_t, Ghost>::iterator it = g_ghosts.begin(); it != g_ghosts.end(); ++it)
+          {
+              if (it->second.h.getCharacter()) { ++withBody; continue; }
+              ++bodiless;
+              if (bodiless <= 5)
+              {
+                  float nl = 1e30f;
+                  for (size_t i = 0; i < g_local.size(); ++i) if (Character* lc = g_local[i].h.getCharacter()) { float d = lc->getPosition().distance(it->second.knownPos); if (d < nl) nl = d; }
+                  char b[80]; sprintf_s(b, "%08x(%.0f u, %d tries) ", it->first, nl < 1e29f ? nl : -1.f, it->second.bodyTries); sample += b;
+              }
+          }
+          log("copies: %d with a body, %d without (%s)", withBody, bodiless, sample.c_str());
+      } }
+    { static DWORD lastTm = 0; if (now - lastTm > 10000) { lastTm = now; log("task mirroring: %ld too far from the owner's spot (>%.0f for players), %ld owner still moving, %ld wanted, %ld subject not found, %ld order refused", g_tmFar, TASK_RANGE, g_tmMoving, g_tmWanted, g_tmNoSubject, g_tmOrderFail); } }
+    for (size_t i = 0; i < g_local.size(); ++i)
+    {
+        Character* c = g_local[i].h.getCharacter();
+        float x, y, z, hp, bl; int fl;
+        if (c && authProbe(c, &x, &y, &z, &hp, &bl, &fl))
+            {
+            { static std::set<uint32_t> dumped; if (dumped.size() < 2 && dumped.insert(g_local[i].id).second) cs_appearanceDump(c, g_local[i].id, "own"); }
+            log("auth: t=%u id=%08x role=own owner=%d x=%.1f y=%.1f z=%.1f hp=%.1f blood=%.1f fl=%d tmpl=%s app=%08x look=%s", (unsigned)now, g_local[i].id, (int)auth_owner(g_local[i].id), x, y, z, hp, bl, fl, c->data ? c->data->stringID.c_str() : "-", hashBytes(cs_appearanceMsg(c, g_local[i].id)), cs_appearanceDigest(c).c_str());
+            if (ready() && auth_owner(g_local[i].id) != g_session.localId()) log("PROBLEM authority: we simulate %08x but the table says player %d owns it", g_local[i].id, (int)auth_owner(g_local[i].id));
+        }
+    }
+    for (std::map<uint32_t, Ghost>::iterator g = g_ghosts.begin(); g != g_ghosts.end(); ++g)
+    {
+        Character* c = g->second.h.getCharacter();
+        float x, y, z, hp, bl; int fl;
+        if (c && authProbe(c, &x, &y, &z, &hp, &bl, &fl))
+        {
+            { static std::set<uint32_t> dumped; if (dumped.size() < 6 && (g->first == 0x00800008 || g->first == 0x00800011 || g->first == 0x02000001 || g->first == 0x00000001) && dumped.insert(g->first).second) cs_appearanceDump(c, g->first, "copy"); }
+            log("auth: t=%u id=%08x role=copy owner=%d x=%.1f y=%.1f z=%.1f hp=%.1f blood=%.1f fl=%d tmpl=%s app=%08x look=%s task=%d", (unsigned)now, g->first, (int)auth_owner(g->first), x, y, z, hp, bl, fl, c->data ? c->data->stringID.c_str() : "-", hashBytes(cs_appearanceMsg(c, g->first)), cs_appearanceDigest(c).c_str(), g->second.mirroredTask);
+        }
+    }
+}
+
+void chars_debugNpcCensus()
+{
+    std::vector<Ogre::Vector3> mine; cs_localPositions(mine);
+    if (mine.empty()) return;
+    // around ours AND around the copies of the other players' characters (the host looks where its client stands)
+    for (std::map<uint32_t, Ghost>::iterator g = g_ghosts.begin(); g != g_ghosts.end(); ++g)
+        if (!isNpcNetId(g->first)) if (Character* gc = g->second.h.getCharacter()) mine.push_back(gc->getPosition());
+    std::vector<Character*> all; cs_allActiveCharacters(all);
+    if (g_session.isHost()) npcs_realAround(mine, 250.f, all);   // the NPCs the host serves to its clients
+    int shown = 0;
+    for (size_t i = 0; i < all.size() && shown < 24; ++i)
+    {
+        Character* c = all[i];
+        if (!c) continue;
+        float nearest = 1e30f;
+        for (size_t k = 0; k < mine.size(); ++k) { float d = c->getPosition().distance(mine[k]); if (d < nearest) nearest = d; }
+        if (nearest > 250.f) continue;
+        uint32_t id = ghostIdOf(c);
+        if (!id && isOurSquad(c)) continue;     // one of ours
+        int trader = 0, dialogue = 0, indoors = 0, items = 0;
+        if (!safeNpcProbe(c, &trader, &dialogue, &indoors, &items)) continue;
+        ++shown;
+        log("npc census: '%s' %s trader=%d dialogue=%d indoors=%d items=%d money=%d at %.0f units from a player", c->getName().c_str(), id ? (isNpcNetId(id) ? "host-NPC-copy" : "player-copy") : "real", trader, dialogue, indoors, items, items_moneyOf(c), nearest);
+    }
+}
+
+// Test: what the trade window would show for the traders around us: the game's own ShopTrader of each one (the shop
+// inventory built from the shelves, and the money). Host (real traders) and client (copies) must show the same.
+namespace
+{
+    bool shopViewInner(Character* t, int* items, int* money)
+    {
+        ShopTrader* st = new ShopTrader(t);
+        Inventory* inv = st->getInventory();
+        *items = inv ? (int)inv->getNumItems() : -1;
+        *money = st->getMoney();
+        delete st;
+        return true;
+    }
+    bool safeShopView(Character* t, int* items, int* money)
+    {
+        __try { return shopViewInner(t, items, money); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+}
+// Test: who the shop counters around a trader belong to (UseableStuff::shopOwner): the real trader owns them, its copy should too.
+namespace
+{
+    // For each counter: whom does its shopOwner resolve to (a character, a platoon), and is that our trader or its squad?
+    struct CounterInfo { int isShop, hasUse, ownerSet, ownerCharIsMe, ownerPlatoonIsMine, ownerCharInMySquad, ownerIsBuilding, ownerIsTown, ownerIsRoot; char ownerName[48]; char sid[40]; char ownerStr[120]; char traderStr[120]; char bfac[48]; char tfac[48]; char townStr[60]; int items; int hasMgr; };
+    void counterInner(Building* b, Character* c, CounterInfo* ci)
+    {
+        ci->isShop = b->getSpecialFunction() == BF_SHOP ? 1 : 0;
+        UseableStuff* us = b->getUseableStuff();
+        if (!us) return;
+        ci->hasUse = 1;
+        if (ci->isShop)
+        {
+            Faction* bf = b->getFaction(); Faction* tf = c->getFaction();
+            if (bf) strncpy_s(ci->bfac, bf->getName().c_str(), _TRUNCATE);
+            if (tf) strncpy_s(ci->tfac, tf->getName().c_str(), _TRUNCATE);
+            strncpy_s(ci->townStr, b->getTownHandle().toString().c_str(), _TRUNCATE);
+            Inventory* inv = us->getInventory();
+            ci->items = inv ? (int)inv->getAllItems().size() : -1;
+            ci->hasMgr = b->buildingsManager ? 1 : 0;
+        }
+        hand none;
+        if (us->shopOwner == none) { if (ci->isShop) strncpy_s(ci->ownerStr, "(null)", _TRUNCATE); return; }
+        ci->ownerSet = 1;
+        Character* oc = us->shopOwner.getCharacter();
+        ActivePlatoon* op = us->shopOwner.getActivePlatoon();
+        ActivePlatoon* mine = c->getPlatoon();
+        strncpy_s(ci->ownerStr, us->shopOwner.toString().c_str(), _TRUNCATE);
+        { hand me(c); strncpy_s(ci->traderStr, me.toString().c_str(), _TRUNCATE); }
+        if (us->shopOwner.getBuilding()) ci->ownerIsBuilding = 1;
+        if (us->shopOwner.getTown()) ci->ownerIsTown = 1;
+        if (us->shopOwner.getRootObject()) ci->ownerIsRoot = 1;
+        if (oc == c) ci->ownerCharIsMe = 1;
+        if (op && op == mine) ci->ownerPlatoonIsMine = 1;
+        if (oc && oc->getPlatoon() == mine) ci->ownerCharInMySquad = 1;
+        if (oc) strncpy_s(ci->ownerName, oc->getName().c_str(), _TRUNCATE);
+        else if (op) strncpy_s(ci->ownerName, "(a platoon)", _TRUNCATE);
+        if (b->data) strncpy_s(ci->sid, b->data->name.c_str(), _TRUNCATE);
+    }
+    bool safeCounter(Building* b, Character* c, CounterInfo* ci)
+    {
+        __try { counterInner(b, c, ci); return true; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+}
+namespace
+{
+    // What the trader's squad owns (the game links a trader to its shop counters through this).
+    struct OwnInfo { int stuff, homeTown, shopsFn, ownedPtrs, counterOwned, counterTotal, ok; char home[80]; };
+    void ownInner(Character* c, lektor<RootObject*>* around, OwnInfo* oi)
+    {
+        Ownerships* o = c->getOwnerships();
+        if (!o) return;
+        oi->ok = 1;
+        oi->stuff = (int)o->stuff.size();
+        oi->homeTown = o->_homeTown ? 1 : 0;
+        strncpy_s(oi->home, o->_homeBuilding.toString().c_str(), _TRUNCATE);
+        lektor<Building*> a; o->getBuildingsWithFunction(a, BF_SHOP); oi->shopsFn = (int)a.size();
+        lektor<Building*> b; o->getOwnedBuildingPtrs(b, o->_homeTown); oi->ownedPtrs = (int)b.size();
+        for (uint32_t i = 0; i < around->size(); ++i)
+        {
+            Building* bl = static_cast<Building*>((*around)[i]);
+            if (bl->getSpecialFunction() != BF_SHOP) continue;
+            ++oi->counterTotal;
+            hand hb(bl);
+            if (o->isOwned(hb)) ++oi->counterOwned;
+        }
+    }
+    bool safeOwn(Character* c, lektor<RootObject*>* around, OwnInfo* oi)
+    {
+        __try { ownInner(c, around, oi); return true; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+}
+static void logCounterOwners(Character* c)
+{
+    {
+        Ogre::Vector3 at0 = c->getPosition();
+        lektor<RootObject*> around0;
+        OwnInfo oi; memset(&oi, 0, sizeof(oi));
+        if (safeShelfQuery(&around0, &at0, 120.f) && safeOwn(c, &around0, &oi))
+            log("  squad of '%s' (%s) owns: %d object(s), home town %d, home building [%s], %d shop building(s) by function, %d owned building(s); shop counters around: %d, of which owned by the squad %d",
+                c->getName().c_str(), ghostIdOf(c) ? "copy" : "real", oi.stuff, oi.homeTown, oi.home, oi.shopsFn, oi.ownedPtrs, oi.counterTotal, oi.counterOwned);
+        else log("  squad of '%s': ownership could not be read", c->getName().c_str());
+    }
+    Ogre::Vector3 at = c->getPosition();
+    lektor<RootObject*> around;
+    if (!safeShelfQuery(&around, &at, 120.f)) return;
+    int shops = 0, useable = 0, owned = 0, mine = 0, platoon = 0, squad = 0, n = 0, listed = 0;
+    for (uint32_t i = 0; i < around.size(); ++i)
+    {
+        CounterInfo ci; memset(&ci, 0, sizeof(ci));
+        if (!safeCounter(static_cast<Building*>(around[i]), c, &ci)) continue;
+        ++n; shops += ci.isShop; useable += ci.hasUse; owned += ci.ownerSet; mine += ci.ownerCharIsMe; platoon += ci.ownerPlatoonIsMine; squad += ci.ownerCharInMySquad;
+        if (ci.isShop && listed < 2) { ++listed; log("  shop '%s' of '%s' (%s): shopOwner=[%s] trader=[%s] building %d town %d root %d, is the trader %d, its platoon %d, same squad %d; bld faction [%s], trader faction [%s], town [%s], counter items %d, mgr %d", ci.sid, c->getName().c_str(), ghostIdOf(c) ? "copy" : "real", ci.ownerStr, ci.traderStr, ci.ownerIsBuilding, ci.ownerIsTown, ci.ownerIsRoot, ci.ownerCharIsMe, ci.ownerPlatoonIsMine, ci.ownerCharInMySquad, ci.bfac, ci.tfac, ci.townStr, ci.items, ci.hasMgr); }
+    }
+    log("shop counters around '%s' (%s): %d building(s), %d shop(s), %d with UseableStuff, %d with an owner, %d owned by this trader, %d by its platoon, %d by its squad's members",
+        c->getName().c_str(), ghostIdOf(c) ? "copy" : "real", n, shops, useable, owned, mine, platoon, squad);
+}
+
+void chars_debugShopView()
+{
+    std::vector<Ogre::Vector3> mine; cs_localPositions(mine);
+    if (mine.empty()) return;
+    for (std::map<uint32_t, Ghost>::iterator g = g_ghosts.begin(); g != g_ghosts.end(); ++g)
+        if (!isNpcNetId(g->first)) if (Character* gc = g->second.h.getCharacter()) mine.push_back(gc->getPosition());
+    std::vector<Character*> all; cs_allActiveCharacters(all);
+    if (g_session.isHost()) npcs_realAround(mine, 250.f, all);
+    std::set<Character*> seen; int shown = 0;
+    for (size_t i = 0; i < all.size() && shown < 8; ++i)
+    {
+        Character* c = all[i];
+        if (!c || seen.count(c)) continue; seen.insert(c);
+        uint32_t id = ghostIdOf(c);
+        if ((id && !isNpcNetId(id)) || (!id && isOurSquad(c))) continue;
+        int tr = 0, dl = 0, ind = 0, it = 0;
+        if (!safeNpcProbe(c, &tr, &dl, &ind, &it) || !tr) continue;
+        float nearest = 1e30f;
+        for (size_t k = 0; k < mine.size(); ++k) { float d = c->getPosition().distance(mine[k]); if (d < nearest) nearest = d; }
+        if (nearest > 250.f) continue;
+        int items = -2, money = -2;
+        bool ok = safeShopView(c, &items, &money);
+        ++shown;
+        logCounterOwners(c);
+        log("shop view: '%s' %s: trade window would show %d item(s), the trader has %d cats (%s)", c->getName().c_str(), id ? "copy" : "real", items, money, ok ? "ok" : "ENGINE ERROR");
+    }
+}
+
+// Test: our first character is ordered to talk to the nearest NPC that has dialogue (what a right-click > Talk does), then
+// what became of the conversation. Run on the host (real NPC) and on the client (copy of the same NPC) to compare.
+namespace
+{
+    Character* g_talkTarget = NULL;
+    hand g_talkHand;
+    bool safeTalkState(Character* t, int* has, int* running, int* ended)
+    {
+        __try
+        {
+            Dialogue* d = t->dialogue;
+            if (!d) { *has = 0; return true; }
+            *has = 1;
+            *running = d->currentConversation != NULL ? 1 : 0;
+            *ended = d->_hasEnded ? 1 : 0;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+}
+std::string chars_debugTalk(Character* me)
+{
+    std::vector<Character*> all; cs_allActiveCharacters(all);
+    if (g_session.isHost()) { std::vector<Ogre::Vector3> c1(1, me->getPosition()); npcs_realAround(c1, 250.f, all); }
+    Character* best = NULL; float bd = 1e30f;
+    for (size_t i = 0; i < all.size(); ++i)
+    {
+        Character* c = all[i];
+        if (!c || c == me) continue;
+        uint32_t id = ghostIdOf(c);
+        if ((id && !isNpcNetId(id)) || (!id && isOurSquad(c))) continue;   // another player's copy / one of ours
+        int tr = 0, dl = 0, ind = 0, it = 0;
+        if (!safeNpcProbe(c, &tr, &dl, &ind, &it) || !dl) continue;
+        float d = c->getPosition().distance(me->getPosition());
+        if (d < bd && d < 250.f) { bd = d; best = c; }
+    }
+    if (!best) return "no NPC with dialogue within 250 units";
+    g_talkTarget = best; g_talkHand = hand(best);
+    Ogre::Vector3 at = best->getPosition();
+    bool ok = safeOrder(me, PLAYER_TALK_TO, best, &at);
+    char b[200]; sprintf_s(b, "order Talk to '%s' (%s) %.0f units away -> %s", best->getName().c_str(), ghostIdOf(best) ? "copy" : "real", bd, ok ? "given" : "failed");
+    return b;
+}
+std::string chars_debugTalkState()
+{
+    Character* t = g_talkHand.getCharacter();
+    if (!t || t != g_talkTarget) return "no target";
+    int has = 0, running = 0, ended = 0;
+    if (!safeTalkState(t, &has, &running, &ended)) return "unreadable";
+    float dist = -1.f, speed = -1.f;
+    { std::vector<Ogre::Vector3> m; cs_localPositions(m); if (!m.empty()) dist = t->getPosition().distance(m[0]); }
+    char b[220]; sprintf_s(b, "'%s' (%s): dialogue object %d, conversation running %d, ended %d, our character %.1f units away", t->getName().c_str(), ghostIdOf(t) ? "copy" : "real", has, running, ended, dist);
+    (void)speed;
+    return b;
+}
+
+// Test (two real games): our character is wounded (one body part set to `flesh`); the other game heals the copy it sees.
+namespace
+{
+    bool safeWound(Character* c, int part, float flesh, float* before)
+    {
+        __try
+        {
+            MedicalSystem& m = c->medical;
+            if (part >= (int)m.anatomy.size()) return false;
+            *before = m.anatomy[part]->flesh;
+            m.anatomy[part]->flesh = flesh; m.anatomy[part]->updateDerivedHealths();
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    bool safeFlesh(Character* c, int part, float* out, float* band = NULL)
+    {
+        __try { if (part >= (int)c->medical.anatomy.size()) return false; *out = c->medical.anatomy[part]->flesh; if (band) *band = c->medical.anatomy[part]->bandaging; return true; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    bool safeAddItem(Inventory* inv, Item* it)
+    {
+        __try { return inv->addItem(it, 1, false, true); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    Item* safeKit(Character* who)
+    {
+        __try { return who->inventory ? who->inventory->getBestItemWithFunction(ITEM_FIRSTAID) : NULL; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return NULL; }
+    }
+    bool safeFirstAid(Character* patient, Character* who, Item* kit, float skill, float dt)
+    {
+        __try { return patient->medical.applyFirstAid(skill, kit, dt, who); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+}
+std::string chars_debugWoundSelf(Character* me)
+{
+    // a REAL wound (through the damage code, so the engine knows the character needs first aid), not just a number
+    if (!me || me->medical.anatomy.size() <= 2) return "failed";
+    float before = me->medical.anatomy[2]->flesh;
+    Damages dmg(45.f, 0.f, 0.f, 1.0f, 0.0f);
+    applyRealDamage(me, me->medical.anatomy[2], dmg);
+    char b[110]; sprintf_s(b, "body part 2 of our character: flesh %.1f -> %.1f (a 45 cut)", before, me->medical.anatomy[2]->flesh);
+    return b;
+}
+std::string chars_debugHealGhost(Character* me)
+{
+    for (std::map<uint32_t, Ghost>::iterator it = g_ghosts.begin(); it != g_ghosts.end(); ++it)
+    {
+        if (isNpcNetId(it->first)) continue;
+        Character* c = it->second.h.getCharacter();
+        if (!c) continue;
+        // the medic needs a first aid kit of its own: copy one from any character of the world if it has none
+        Item* kit = safeKit(me);
+        bool gave = false;
+        if (!kit)
+        {
+            std::vector<Character*> everyone; cs_allActiveCharacters(everyone);
+            Item* donor = NULL;
+            for (size_t k = 0; k < everyone.size() && !donor; ++k) if (everyone[k] && everyone[k] != c && everyone[k] != me) donor = safeKit(everyone[k]);
+            if (donor && donor->data)
+            {
+                bool crashed = false; hand owner(me);
+                Item* made = safeCreateItem(donor->data, NULL, NULL, &owner, -1, &crashed);
+                if (made && me->inventory && safeAddItem(me->inventory, made)) { kit = safeKit(me); gave = kit != NULL; }
+            }
+        }
+        // what a right-click > First aid does: the order; the engine walks the medic there and treats (the hooks see it)
+        Ogre::Vector3 at = c->getPosition();
+        bool ok = safeOrder(me, FIRST_AID_ORDER, c, &at);
+        char b[220]; sprintf_s(b, "order First aid on the copy %08x (kit %s%s), %.0f units away -> %s", it->first, kit ? "found" : "NONE", gave ? ", given" : "", me->getPosition().distance(at), ok ? "given" : "failed");
+        return b;
+    }
+    return "no player copy";
+}
+// Control: the same first aid call on our OWN real wounded character (does the engine function work in this setup at all?).
+std::string chars_debugHealSelf(Character* me)
+{
+    Item* kit = safeKit(me);
+    if (!kit)
+    {
+        std::vector<Character*> everyone; cs_allActiveCharacters(everyone);
+        for (size_t k = 0; k < everyone.size() && !kit; ++k) if (everyone[k] && everyone[k] != me) kit = safeKit(everyone[k]);
+    }
+    float f0 = 0, b0 = 0, f1 = 0, b1 = 0;
+    safeFlesh(me, 2, &f0, &b0);
+    int did = 0;
+    for (int i = 0; i < 40; ++i) if (safeFirstAid(me, me, kit, 70.f, 0.5f)) ++did;
+    safeFlesh(me, 2, &f1, &b1);
+    char b[220]; sprintf_s(b, "control, on our own character: engine did something %d/40 (kit %s), part 2 flesh %.1f -> %.1f, bandaging %.2f -> %.2f", did, kit ? "found" : "NONE", f0, f1, b0, b1);
+    return b;
+}
+std::string chars_debugGhostMedical()
+{
+    for (std::map<uint32_t, Ghost>::iterator it = g_ghosts.begin(); it != g_ghosts.end(); ++it)
+    {
+        if (isNpcNetId(it->first)) continue;
+        Character* c = it->second.h.getCharacter();
+        if (!c) continue;
+        std::string out; char b[80];
+        MedicalSystem& m = c->medical;
+        for (uint32_t i = 0; i < m.anatomy.size() && i < 8; ++i) { sprintf_s(b, "[%u] f%.1f b%.2f s%.2f  ", i, m.anatomy[i]->flesh, m.anatomy[i]->bandaging, m.anatomy[i]->fleshStun); out += b; }
+        sprintf_s(b, "blood %.1f", m.blood); out += b;
+        return out;
+    }
+    return "no player copy";
+}
+std::string chars_debugFleshSelf(Character* me)
+{
+    float f = -1, bd = -1; safeFlesh(me, 2, &f, &bd);
+    char b[100]; sprintf_s(b, "our character's part 2: flesh %.1f, bandaging %.2f", f, bd);
+    return b;
+}
+
+namespace
+{
+    bool focusInner(Character* c, float off, float forward)
+    {
+        Ogre::Camera* cam = safeGameCamera();
+        Ogre::Matrix4 view, proj; Ogre::Vector3 camPos;
+        Ogre::Vector3 p = c->getPosition();
+        if (cam && safeCameraMatrices(cam, &view, &proj, &camPos))
+        {
+            Ogre::Vector3 right(view[0][0], view[0][1], view[0][2]);
+            right.y = 0; right.normalise();
+            Ogre::Vector3 fwd(-view[2][0], 0, -view[2][2]);   // where the camera looks, flattened
+            if (fwd.squaredLength() > 1e-6f) { fwd.normalise(); p = p - fwd * forward; }
+            p = p - right * off;
+        }
+        ou->player->focusCamera(p);
+        return true;
+    }
+    bool safeFocus(Character* c, float off, float forward)
+    {
+        __try { return focusInner(c, off, forward); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+}
+void chars_debugFocus(Character* c, float rightOffset, float forwardOffset) { if (c) safeFocus(c, rightOffset, forwardOffset); }
+
+// Test: the game's own frame (3D view and interface) saved to a PNG next to the game (Ogre's render target).
+bool chars_screenshot(const std::string& file)
+{
+    log("shot %s: name label of the last player copy: feet at (%d,%d), anchor at (%d,%d), box at (%d,%d), tag height %.2f, view %dx%d", file.c_str(),
+        g_nameFeetPx[0], g_nameFeetPx[1], g_nameAnchorPx[0], g_nameAnchorPx[1], g_nameBoxPx[0], g_nameBoxPx[1], g_nameTag, g_nameViewW, g_nameViewH);
+    return safeWriteShot(file.c_str());
+}
+
 void chars_clearPlayerNames()
 {
     for (std::map<uint32_t, NameLabel>::iterator it = g_names.begin(); it != g_names.end(); ++it) destroyName(it->second);
@@ -2670,6 +3601,8 @@ void chars_showPlayerNames()
     Ogre::Matrix4 view, proj;
     Ogre::Vector3 camPos;
     bool haveCam = cam && safeCameraMatrices(cam, &view, &proj, &camPos);
+    Ogre::Vector3 worldCam, rebase(0, 0, 0);
+    if (haveCam && safeWorldCamPos(&worldCam)) rebase = worldCam - camPos;   // world = render space + rebase
     MyGUI::IntSize screen(0, 0);
     try { screen = MyGUI::RenderManager::getInstance().getViewSize(); } catch (...) { haveCam = false; }
 
@@ -2689,22 +3622,41 @@ void chars_showPlayerNames()
                 g_names.erase(it->first);
                 g_namesFailed = true;
                 log("player names: could not create the name labels, disabled");
+                problem("names", "the name labels above the other players could not be created");
                 chars_clearPlayerNames();
                 return;
             }
         }
-        if (!haveCam) { hideName(l); continue; }
+        g_nameViewW = screen.width; g_nameViewH = screen.height;
+        ++g_nameFrames;
+        if (!haveCam) { ++g_nameNoCam; hideName(l); continue; }
 
         // Where the model is drawn (render smoothing may draw it off the simulated body).
         Ghost& g = it->second;
         Ogre::Vector3 at = g_cfg.renderSmoothing && g.hasVisual && g.blend > 0.f ? g.lastDrawn : c->getPosition();
-        at.y += safeTagHeight(c);
+        g_nameFeet[0] = at.x; g_nameFeet[1] = at.y; g_nameFeet[2] = at.z; g_nameTag = safeTagHeight(c);
+        at.y += g_nameTag;
+        at -= rebase;                  // world -> render space
         Ogre::Vector3 v = view * at;   // camera space: the camera looks down -Z
-        if (v.z > -0.5f || camPos.distance(at) > NAME_MAX_DISTANCE) { hideName(l); continue; }
+        g_nameCam[0] = camPos.x; g_nameCam[1] = camPos.y; g_nameCam[2] = camPos.z; g_nameAt[0] = at.x; g_nameAt[1] = at.y; g_nameAt[2] = at.z; g_nameV[0] = v.x; g_nameV[1] = v.y; g_nameV[2] = v.z;
+        if (v.z > -0.5f) { ++g_nameBehind; hideName(l); continue; }
+        if (camPos.distance(at) > NAME_MAX_DISTANCE) { ++g_nameFar; hideName(l); continue; }
         Ogre::Vector3 p = proj * v;    // normalised device coordinates (-1..1)
-        if (p.x < -1.1f || p.x > 1.1f || p.y < -1.1f || p.y > 1.1f) { hideName(l); continue; }
+        if (p.x < -1.1f || p.x > 1.1f || p.y < -1.1f || p.y > 1.1f) { ++g_nameOff; hideName(l); continue; }
+        g_nameP[0] = p.x; g_nameP[1] = p.y;
         int x = (int)((p.x * 0.5f + 0.5f) * screen.width) - NAME_W / 2;
+        // Normalised device y runs upwards, the screen's y downwards. (V23 had this mirrored: it looked right only for a
+        // character at the vertical centre of the screen, which is where the test frames had it. A player's video showed
+        // label_y + character_y constant over the whole screen = a mirror image about the centre.)
         int y = (int)((0.5f - p.y * 0.5f) * screen.height) - NAME_H;
+        {   // shot diagnostics: where the feet, the anchor and the label box land on the screen
+            Ogre::Vector3 fr(g_nameFeet[0], g_nameFeet[1], g_nameFeet[2]);
+            fr -= rebase;
+            Ogre::Vector3 fp = proj * (view * fr);
+            g_nameFeetPx[0] = (int)((fp.x * 0.5f + 0.5f) * screen.width); g_nameFeetPx[1] = (int)((0.5f - fp.y * 0.5f) * screen.height);
+            g_nameAnchorPx[0] = (int)((p.x * 0.5f + 0.5f) * screen.width); g_nameAnchorPx[1] = (int)((0.5f - p.y * 0.5f) * screen.height);
+            g_nameBoxPx[0] = x; g_nameBoxPx[1] = y;
+        }
 
         std::string text = std::string(chat_playerColour(netIdOwner(it->first))) + chat_clean(c->getName());
         try
@@ -2712,6 +3664,7 @@ void chars_showPlayerNames()
             if (text != l.text) { l.text = text; l.w->setCaption(text); }
             l.w->setPosition(x, y);
             if (!l.shown) { l.shown = true; l.w->setVisible(true); }
+            ++g_nameDrawn; g_nameLastX = x; g_nameLastY = y;
         }
         catch (...) {}
     }
@@ -2791,10 +3744,40 @@ static void refreshNearNpcs(DWORD now)
     g_nearNpcs.swap(near_);
 }
 
+// A copy whose body could not be created (the engine refused, the zone was not loaded yet, it was too far when announced)
+// is tried again here: the host announces each of its NPCs once, nobody would ever make it otherwise ("invisible NPC").
+static void retryBodiless(DWORD now)
+{
+    static DWORD last = 0;
+    if (now - last < 1000) return;
+    last = now;
+    std::vector<uint32_t> ids;
+    for (std::map<uint32_t, Ghost>::iterator it = g_ghosts.begin(); it != g_ghosts.end(); ++it)
+    {
+        Ghost& g = it->second;
+        if (!g.hasSpawn || g.h.getCharacter() || now - g.lastBodyTry < 1500) continue;
+        ids.push_back(it->first);
+    }
+    int budget = 6;   // bodies made per second, closest to us first would be better but this stays simple
+    for (size_t k = 0; k < ids.size() && budget > 0; ++k)
+    {
+        std::map<uint32_t, Ghost>::iterator it = g_ghosts.find(ids[k]);
+        if (it == g_ghosts.end()) continue;
+        Ghost& g = it->second;
+        g.lastBodyTry = now; ++g.bodyTries;
+        EntitySpawn sp = g.spawn;
+        sp.x = g.knownPos.x; sp.y = g.knownPos.y; sp.z = g.knownPos.z;   // where it is now
+        spawnGhost(netIdOwner(ids[k]), sp);
+        if (g_ghosts[ids[k]].h.getCharacter()) { --budget; if (g_cfg.autotest) log("ghost %08x: body made on try %d", ids[k], g_ghosts[ids[k]].bodyTries); }
+    }
+}
+
 void chars_tick(DWORD now)
 {
     driveGhosts(now);   // every frame
+    retryBodiless(now);
     updateHeld(now);
+    fixShopOwners(now);
     if (g_cfg.tuneOnScreen) refreshNearNpcs(now);
     if (now - g_lastState >= STATE_PERIOD_MS)
     {
@@ -2893,7 +3876,8 @@ void chars_onMessage(const NetEvent& e)
         for (int i = 0; i < n && r.ok(); ++i)
         {
             EntityState s; s.read(r);
-            if (!r.ok() || netIdOwner(s.netId) != e.sender || !s.sanitize()) continue;
+            if (!r.ok() || !s.sanitize()) continue;
+            if (!auth_checkSender(s.netId, e.sender)) continue;   // only the entity's owner simulates it (core/Authority.h)
             if (g_session.isHost() && !isNpcNetId(s.netId)) checkMovement(e.sender, s, senderMs);
             applyGhostState(s, snapT);
         }
@@ -2959,16 +3943,16 @@ void chars_onMessage(const NetEvent& e)
         if (r.ok() && target == g_session.localId()) applyIncomingDamage(d, e.sender);
         break;
     }
-    case MSG_ESCAPED:
-    {
-        uint8_t target = r.u8(); uint32_t id = r.u32();
-        if (!r.ok() || target != g_session.localId() || netIdOwner(id) != e.sender) break;
-        std::map<uint32_t, Ghost>::iterator gi = g_ghosts.find(id);
-        Character* c = gi == g_ghosts.end() ? NULL : gi->second.h.getCharacter();
-        if (c && gi->second.held) log("ghost %08x picked the lock: let out (%s)", id, safeFreeFromCage(c) ? "done" : "engine refused");
-        break;
-    }
-    case MSG_CARRIED:
+    case MSG_ESCAPED:
+    {
+        uint8_t target = r.u8(); uint32_t id = r.u32();
+        if (!r.ok() || target != g_session.localId() || netIdOwner(id) != e.sender) break;
+        std::map<uint32_t, Ghost>::iterator gi = g_ghosts.find(id);
+        Character* c = gi == g_ghosts.end() ? NULL : gi->second.h.getCharacter();
+        if (c && gi->second.held) log("ghost %08x picked the lock: let out (%s)", id, safeFreeFromCage(c) ? "done" : "engine refused");
+        break;
+    }
+    case MSG_CARRIED:
     {
         uint8_t target = r.u8();
         CarriedMsg m; m.read(r);
@@ -3130,7 +4114,7 @@ void medApply_hook(MedicalSystem* self, MedicalSystem::HealthPartStatus* part, c
 
 // First aid, doctoring, robot repair: when the patient is the copy of somebody else's character, what the care
 // changed is measured and sent to the owner (see flushHeals); the copy is overwritten by the owner's state anyway.
-struct HealSnap { uint32_t id; int n; float flesh[32]; float blood; MedicalSystem* m; };
+struct HealSnap { uint32_t id; int n; float flesh[32], band[32], rig[32]; float blood; MedicalSystem* m; };
 static bool healBegin(MedicalSystem* self, HealSnap& s)
 {
     if (!self || !ready() || g_applyingSync) return false;
@@ -3140,7 +4124,7 @@ static bool healBegin(MedicalSystem* self, HealSnap& s)
         if (!c || &c->medical != self) continue;
         s.id = it->first; s.m = self; s.blood = self->blood;
         s.n = (int)self->anatomy.size(); if (s.n > 32) s.n = 32;
-        for (int i = 0; i < s.n; ++i) s.flesh[i] = self->anatomy[i]->flesh;
+        for (int i = 0; i < s.n; ++i) { s.flesh[i] = self->anatomy[i]->flesh; s.band[i] = self->anatomy[i]->bandaging; s.rig[i] = self->anatomy[i]->juryRigging; }
         return true;
     }
     return false;
@@ -3152,6 +4136,10 @@ static void healEnd(const HealSnap& s)
     {
         float d = s.m->anatomy[i]->flesh - s.flesh[i];
         if (d > 0.001f) { a.d[i] += d; a.any = true; }
+        float db = s.m->anatomy[i]->bandaging - s.band[i];
+        if (db > 0.001f) { a.b[i] += db; a.any = true; }
+        float dr = s.m->anatomy[i]->juryRigging - s.rig[i];
+        if (dr > 0.001f) { a.r[i] += dr; a.any = true; }
     }
     float b = s.m->blood - s.blood;
     if (b > 0.001f) { a.blood += b; a.any = true; }
@@ -3439,7 +4427,22 @@ void chars_logHitStats()
     if (g_trackErrN)
         log("ghost tracking: mean offset %.2f, max %.2f (units) over %ld frame-samples, %d snap(s)",
             g_trackErrSum / g_trackErrN, g_trackErrMax, g_trackErrN, g_snaps);
+    if (g_trackErrN > 60 && (g_trackErrSum / g_trackErrN > 40.0 || g_snaps > 25))
+        problem("tracking", "the other players' characters follow badly (mean lag %.0f units, %d teleports in the last 30 s): network or load problem", g_trackErrSum / g_trackErrN, g_snaps);
     if (g_jumpFrames) { log("ghost tracking: %ld unexplained jump(s) under 20 units and %ld of 20+ in %ld frame-samples (largest %.1f)", g_microJumps, g_bigJumps, g_jumpFrames, g_jumpMax); g_microJumps = g_bigJumps = g_jumpFrames = 0; g_jumpMax = 0; }
+    if (g_nameFrames)
+    {
+        log("player names: %d label(s); of %ld label-frames: %ld drawn (last at %d,%d), %ld without camera, %ld behind the camera, %ld too far, %ld off screen",
+            (int)g_names.size(), g_nameFrames, g_nameDrawn, g_nameLastX, g_nameLastY, g_nameNoCam, g_nameBehind, g_nameFar, g_nameOff);
+        float cd[12];
+        if (safeCamDiag(cd))
+            log("player names: camera local (%.0f,%.0f,%.0f), derived (%.0f,%.0f,%.0f), getCameraPos (%.0f,%.0f,%.0f), node derived (%.0f,%.0f,%.0f)",
+                cd[0], cd[1], cd[2], cd[3], cd[4], cd[5], cd[6], cd[7], cd[8], cd[9], cd[10], cd[11]);
+        log("player names: camera (%.0f,%.0f,%.0f), label anchor (%.0f,%.0f,%.0f), in camera space (%.1f,%.1f,%.1f)",
+            g_nameCam[0], g_nameCam[1], g_nameCam[2], g_nameAt[0], g_nameAt[1], g_nameAt[2], g_nameV[0], g_nameV[1], g_nameV[2]);
+        log("player names: feet (%.1f,%.1f,%.1f), tag height %.2f, ndc (%.3f,%.3f), view %dx%d", g_nameFeet[0], g_nameFeet[1], g_nameFeet[2], g_nameTag, g_nameP[0], g_nameP[1], g_nameViewW, g_nameViewH);
+        g_nameFrames = g_nameDrawn = g_nameNoCam = g_nameOff = g_nameBehind = g_nameFar = 0;
+    }
     if (g_unstucks) log("ghost tracking: %ld stuck ghost(s) placed next to their owner", g_unstucks);
     if (g_immuneCalls) { log("ghost tracking: off-screen mode refused %ld time(s)", g_immuneCalls); g_immuneCalls = 0; }
     if (g_immuneNpcCalls) { log("ghost tracking: off-screen mode refused %ld time(s) for host NPCs near us", g_immuneNpcCalls); g_immuneNpcCalls = 0; }

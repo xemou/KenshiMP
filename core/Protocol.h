@@ -16,7 +16,7 @@
 
 namespace mp {
 
-const uint32_t PROTOCOL_VERSION = 22;
+const uint32_t PROTOCOL_VERSION = 25;
 
 // World NPCs replicated by the host use the upper half of the host's local id space.
 const uint32_t NPC_ID_FLAG = 0x800000;
@@ -78,7 +78,9 @@ enum MsgType
     MSG_HEAL,             // u8 targetPlayer, HealMsg : first aid / doctoring given to a copy of the target's character (the owner applies it to the real one)
     MSG_CARRIED,          // u8 targetPlayer, CarriedMsg : the copy of the target's knocked-out character is being carried / caged / put to bed here
     MSG_ESCAPED,          // u8 targetPlayer, u32 netId : the character you caged picked the lock: let it out
-    MSG_SPEED             // f32 speed : the game speed this player chose (x1, x2, x3); it applies only when everybody chose the same
+    MSG_SPEED,            // f32 speed : the game speed this player chose (x1, x2, x3); it applies only when everybody chose the same
+    MSG_AUTH_TABLE,       // h->c the authority table (core/Authority.h): u16 n, {u32 netId, u8 owner, u16 epoch}* : who simulates each entity that is not at its default owner
+    MSG_AUTH_HANDOFF      // h->c u8 targetPlayer, u8 action (HandoffAction), u32 netId, u16 epoch : the host's answer to MSG_NPC_CLAIM (granted / refused / nothing left to hand over)
 };
 
 inline bool isRelayed(uint8_t t) { return t >= MSG_ENTITY_STATE; }
@@ -144,6 +146,7 @@ struct EntityState
     uint8_t  moveSpeed;     // MoveSpeed orders (WALK/JOG/RUN...)
     float blood;
     std::vector<float> flesh;       // per body part, anatomy order
+    std::vector<float> bandage;     // per body part: bandaging (what first aid adds: the wound is treated, it stops bleeding)
     TargetRef combatTarget;
     uint16_t task;                  // current TaskType (0xFFFF = none)
     TargetRef taskSubject;
@@ -160,6 +163,7 @@ struct EntityState
         w.f32(health); w.u16(anim); w.u8(flags);
         w.u8(moveSpeed); w.f32(blood);
         w.u8((uint8_t)flesh.size()); for (size_t k = 0; k < flesh.size(); ++k) w.f32(flesh[k]);
+        w.u8((uint8_t)bandage.size()); for (size_t k = 0; k < bandage.size(); ++k) w.f32(bandage[k]);
         combatTarget.write(w);
         w.u16(task); taskSubject.write(w); w.f32(tx); w.f32(ty); w.f32(tz);
         w.f32(vx); w.f32(vy); w.f32(vz);
@@ -172,6 +176,7 @@ struct EntityState
         health = r.f32(); anim = r.u16(); flags = r.u8();
         moveSpeed = r.u8(); blood = r.f32();
         uint8_t n = r.u8(); flesh.clear(); for (int k = 0; k < n && r.ok(); ++k) flesh.push_back(r.f32());
+        uint8_t nb = r.u8(); bandage.clear(); for (int k = 0; k < nb && r.ok(); ++k) bandage.push_back(r.f32());
         combatTarget.read(r);
         task = r.u16(); taskSubject.read(r); tx = r.f32(); ty = r.f32(); tz = r.f32();
         vx = r.f32(); vy = r.f32(); vz = r.f32();
@@ -185,6 +190,7 @@ struct EntityState
         health = clampF(health, -1000.f, 1000.f);
         blood = clampF(blood, 0.f, 10000.f);
         for (size_t k = 0; k < flesh.size(); ++k) flesh[k] = clampF(flesh[k], -1000.f, 1000.f);
+        for (size_t k = 0; k < bandage.size(); ++k) bandage[k] = clampF(bandage[k], 0.f, 1000.f);
         if (!validPos(tx, ty, tz)) { tx = x; ty = y; tz = z; }
         if (combatTarget.kind > TargetRef::WORLD_BUILDING || !validPos(combatTarget.x, combatTarget.y, combatTarget.z)) combatTarget = TargetRef();
         if (taskSubject.kind > TargetRef::WORLD_BUILDING || !validPos(taskSubject.x, taskSubject.y, taskSubject.z)) taskSubject = TargetRef();
@@ -433,28 +439,34 @@ struct DamageMsg
 // Treatment given to a copy of somebody else's character: what the care changed (per body part, and blood),
 // applied by the owner to the real character (the copy itself is overwritten by the owner's state).
 const float MAX_HEAL = 500.f;
+struct HealPart { uint8_t idx; float flesh, bandage, rig; HealPart() : idx(0), flesh(0), bandage(0), rig(0) {} };
 struct HealMsg
 {
     uint32_t victimNetId;
-    std::vector<std::pair<uint8_t, float> > parts;   // body part index, flesh gained
-    float blood;                                     // blood gained
+    std::vector<HealPart> parts;   // per body part: flesh gained, bandaging added (what first aid does), robot repair added
+    float blood;                   // blood gained
 
     HealMsg() : victimNetId(0), blood(0) {}
     void write(ByteWriter& w) const
     {
         w.u32(victimNetId); w.u8((uint8_t)(parts.size() > 32 ? 32 : parts.size()));
-        for (size_t i = 0; i < parts.size() && i < 32; ++i) { w.u8(parts[i].first); w.f32(parts[i].second); }
+        for (size_t i = 0; i < parts.size() && i < 32; ++i) { w.u8(parts[i].idx); w.f32(parts[i].flesh); w.f32(parts[i].bandage); w.f32(parts[i].rig); }
         w.f32(blood);
     }
     void read(ByteReader& r)
     {
         victimNetId = r.u32(); uint8_t n = r.u8(); parts.clear();
-        for (int i = 0; i < n && i < 32 && r.ok(); ++i) { uint8_t k = r.u8(); float v = r.f32(); parts.push_back(std::make_pair(k, v)); }
+        for (int i = 0; i < n && i < 32 && r.ok(); ++i) { HealPart h; h.idx = r.u8(); h.flesh = r.f32(); h.bandage = r.f32(); h.rig = r.f32(); parts.push_back(h); }
         blood = r.f32();
     }
     void sanitize()
     {
-        for (size_t i = 0; i < parts.size(); ++i) parts[i].second = clampF(parts[i].second, 0, MAX_HEAL);
+        for (size_t i = 0; i < parts.size(); ++i)
+        {
+            parts[i].flesh = clampF(parts[i].flesh, 0, MAX_HEAL);
+            parts[i].bandage = clampF(parts[i].bandage, 0, MAX_HEAL);
+            parts[i].rig = clampF(parts[i].rig, 0, MAX_HEAL);
+        }
         blood = clampF(blood, 0, MAX_HEAL * 10);
     }
 };
@@ -470,16 +482,17 @@ struct CarriedMsg
     float x, y, z;
     float qx, qy, qz, qw;
     int8_t floor;
+    uint32_t carrier;   // state CARRIED: the carrying character (so the owner's game shows it carrying), 0 if unknown
 
-    CarriedMsg() : netId(0), state(0), x(0), y(0), z(0), qx(0), qy(0), qz(0), qw(1), floor(0) {}
+    CarriedMsg() : netId(0), state(0), x(0), y(0), z(0), qx(0), qy(0), qz(0), qw(1), floor(0), carrier(0) {}
     void write(ByteWriter& w) const
     {
-        w.u32(netId); w.u8(state); w.f32(x); w.f32(y); w.f32(z); w.f32(qx); w.f32(qy); w.f32(qz); w.f32(qw); w.u8((uint8_t)floor);
+        w.u32(netId); w.u8(state); w.f32(x); w.f32(y); w.f32(z); w.f32(qx); w.f32(qy); w.f32(qz); w.f32(qw); w.u8((uint8_t)floor); w.u32(carrier);
     }
     void read(ByteReader& r)
     {
         netId = r.u32(); state = r.u8(); x = r.f32(); y = r.f32(); z = r.f32();
-        qx = r.f32(); qy = r.f32(); qz = r.f32(); qw = r.f32(); floor = (int8_t)r.u8();
+        qx = r.f32(); qy = r.f32(); qz = r.f32(); qw = r.f32(); floor = (int8_t)r.u8(); carrier = r.u32();
     }
     // False if unusable (unknown state, bad position).
     bool sanitize()

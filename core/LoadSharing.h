@@ -19,4 +19,15 @@ inline int shareMode(int prev, float distance)
     return distance < SHARE_ENTER ? SHARE_SHARED : SHARE_APART;
 }
 
+// The zone belongs to the host and reaches as far as its render distance for people (its "npc range", plugin/Npcs.cpp):
+// the shared world starts well inside that reach and the client only goes to its own world once it is clearly outside it,
+// so everybody in the host's zone sees the same people and nobody flips worlds at the zone's edge.
+const float SHARE_ENTER_FRACTION = 0.75f;   // of the host's npc range
+const float SHARE_LEAVE_FRACTION = 1.15f;
+inline int shareMode(int prev, float distance, float npcRange)
+{
+    if (prev == SHARE_SHARED) return distance < npcRange * SHARE_LEAVE_FRACTION ? SHARE_SHARED : SHARE_APART;
+    return distance < npcRange * SHARE_ENTER_FRACTION ? SHARE_SHARED : SHARE_APART;
+}
+
 } // namespace mp

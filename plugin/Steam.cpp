@@ -36,6 +36,7 @@ namespace
     typedef bool (*ReadP2PFn)(void* net, void* dest, unsigned int destSize, unsigned int* size, unsigned long long* peer, int channel);
     typedef bool (*PeerFn)(void* net, unsigned long long peer);
     typedef bool (*AllowRelayFn)(void* net, bool allow);
+    typedef bool (*SessionStateFn)(void* net, unsigned long long peer, void* state);   // P2PSessionState_t (optional: diagnosis only)
     typedef int (*FriendCountFn)(void* friends, int flags);
     typedef unsigned long long (*FriendByIndexFn)(void* friends, int index, int flags);
     typedef const char* (*FriendNameFn)(void* friends, unsigned long long id);
@@ -54,7 +55,7 @@ namespace
         int hUser, hPipe;
         GetSteamIDFn getSteamID;
         SendP2PFn sendP2P; IsP2PAvailableFn isP2PAvailable; ReadP2PFn readP2P;
-        PeerFn acceptSession, closeSession; AllowRelayFn allowRelay;
+        PeerFn acceptSession, closeSession; AllowRelayFn allowRelay; SessionStateFn sessionState;
         FriendCountFn friendCount; FriendByIndexFn friendByIndex; FriendNameFn friendName;
         FriendStateFn friendState; FriendGameFn friendGame; InviteFn invite; RichPresenceFn richPresence;
         PersonaFn persona; RunCallbacksFn runCallbacks; RegisterCallbackFn registerCallback;
@@ -208,6 +209,7 @@ bool steam_init()
         & resolve(g_api.runCallbacks, "SteamAPI_RunCallbacks")
         & resolve(g_api.registerCallback, "SteamAPI_RegisterCallback");
     if (!all) return false;
+    resolve(g_api.sessionState, "SteamAPI_ISteamNetworking_GetP2PSessionState");   // optional
     g_me = g_api.getSteamID(g_api.user);
     g_api.allowRelay(g_api.net, true);
     g_cbSession.id = 1202; g_api.registerCallback(&g_cbSession, 1202);
@@ -298,10 +300,29 @@ void steam_leave()
 }
 
 // Every frame (game thread): Steam callbacks, then a pending join request, if any.
+// While we are joining a Steam host: what Steam says about the P2P path (direct or relayed, error), every 4 s for a
+// minute, and a "PROBLEM:" line when no path comes up ("timed out (no data)" in the reports).
+static void diagnoseSession()
+{
+    static DWORD lastAt = 0, startedAt = 0; static unsigned long long forHost = 0;
+    if (!g_tunnelClient.running() || !g_tunnelClientHost || !g_api.sessionState) { forHost = 0; return; }
+    DWORD now = GetTickCount();
+    if (forHost != g_tunnelClientHost) { forHost = g_tunnelClientHost; startedAt = now; lastAt = 0; }
+    if (now - startedAt > 60000 || now - lastAt < 4000) return;
+    lastAt = now;
+    struct State { unsigned char active, connecting, error, relay; int bytesQ, packetsQ; unsigned int ip; unsigned short port; } st;
+    memset(&st, 0, sizeof(st));
+    if (!g_api.sessionState(g_api.net, g_tunnelClientHost, &st)) { log("steam: no P2P session with the host yet"); return; }
+    log("steam: P2P session with the host: active %d, connecting %d, error %d, relayed %d, %d byte(s) waiting", (int)st.active, (int)st.connecting, (int)st.error, (int)st.relay, st.bytesQ);
+    if (now - startedAt > 12000 && !st.active)
+        problem("steam", "no Steam P2P path to the host after %lu s (error %d, %s): likely a network or region problem between the two PCs", (unsigned long)((now - startedAt) / 1000), (int)st.error, st.connecting ? "still connecting" : "not connecting");
+}
+
 bool steam_takeJoinRequest(unsigned long long& host)
 {
     if (!g_ok) return false;
     g_api.runCallbacks();
+    diagnoseSession();
     EnterCriticalSection(&g_cs);
     bool any = !g_joinRequests.empty();
     if (any) { host = g_joinRequests.front(); g_joinRequests.pop_front(); }
