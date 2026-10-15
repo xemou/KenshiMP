@@ -200,6 +200,7 @@ namespace
         else if (k == "autotest_goto_shop") g_cfg.autotestGotoShop = toBool(v);
         else if (k == "autotest_carry") g_cfg.autotestCarry = toBool(v);
         else if (k == "autotest_build") g_cfg.autotestBuild = toBool(v);
+        else if (k == "autotest_clock") g_cfg.autotestClock = toBool(v);
         else if (k == "npc_range") g_cfg.npcRange = atoi(v.c_str());
         else if (k == "autotest_shots") g_cfg.autotestShots = atoi(v.c_str());
             else if (k == "lobby_key")
@@ -748,6 +749,15 @@ namespace
                 if (shotNo == 5) log("autotest: talk -> %s", chars_debugTalk(me).c_str());
                 if (shotNo == 6 || shotNo == 7) log("autotest: talk state -> %s", chars_debugTalkState().c_str());
             }
+        }
+        // autotest_clock=1: the clock jumps 10 days like a client's when it joins a game further on; our characters'
+        // hunger / blood / death are logged before and every second after (they starved to death on join).
+        if (g_cfg.autotestClock)
+        {
+            static int cs = 0; static DWORD lastV = 0;
+            if (cs == 0 && s >= 8) { cs = 1; log("autotest: vitals before -> %s", chars_debugVitals().c_str()); log("autotest: clock jump -> %s", world_debugJump(240.0).c_str()); lastV = now; }
+            if (cs == 1 && now - lastV >= 1000) { lastV = now; log("autotest: vitals after -> %s", chars_debugVitals().c_str()); if (s >= 40) { cs = 2; log("autotest: clock; done"); } }
+            return;
         }
         // autotest_build=1: its own short script. Each game places a finished building and a blueprint next to its first
         // character, then advances the blueprint; both report their own buildings and the copies of the other's. Then the

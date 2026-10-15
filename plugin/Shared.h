@@ -55,6 +55,7 @@ struct Config
     int npcRange;              // host: how far around a player the host's NPCs are shown to it (0 = the game's own "npc range", 3250 by default)
     int autotestShots;         // test: save a frame every N seconds (kmp_shot_<role>_<n>.png)
     bool autotestCarry;        // test: carry a knocked-out ghost, then get knocked out and carried
+    bool autotestClock;        // test: the clock jumps 10 days (as when joining a game further on), our characters' vitals logged
     bool autotestBuild;        // test: buildings placed on each side, seen on the other; world map opened with the players' names
     bool autotestGotoShop;     // test: the squad is moved next to the nearest shop (shop shelves in reach)
     std::string lobbyKeyName;
@@ -85,7 +86,7 @@ struct Config
                relation(0), ghostAI("none"), syncAppearance(true), syncEquipment(true), syncBuildings(true),
                debugKeys(false), npcSync(true), strictMods(false), autoReconnect(true), pauseSync(true),
                renderSmoothing(true), weatherSync(true), lobbyKey(VK_F4), lobbyKeyName("F4"), language("auto"), playersOnMap(true),
-               tuneSpeedMatch(true), tuneTrail(true), tuneRepath(true), tuneUnblock(true), tuneOnScreen(true), ghostNoCollide(false), loadSharing(false), assaultHostility(false), playerNames(true), playerNamesRange(0), speedVote(true), townSync(true), backupSaves(5), autotest(false), autotestGotoShop(false), autotestCarry(false), autotestBuild(false), autotestShots(0), npcRange(0),
+               tuneSpeedMatch(true), tuneTrail(true), tuneRepath(true), tuneUnblock(true), tuneOnScreen(true), ghostNoCollide(false), loadSharing(false), assaultHostility(false), playerNames(true), playerNamesRange(0), speedVote(true), townSync(true), backupSaves(5), autotest(false), autotestGotoShop(false), autotestCarry(false), autotestBuild(false), autotestClock(false), autotestShots(0), npcRange(0),
                transport("tcp"), serverName("KenshiMP server"), maxPlayers(16), serverAccounts(true), serverConsole(false), serverWindow("normal"),
                serverRender(true), serverFps(0), serverAutosaveMin(10), serverSave("kenshimp_server"), serverMaxPerAddress(4), serverNpcCap(256),
                serverNpcBudget(48), logMaxMB(8), serverKickRefusals(0) {}
@@ -193,6 +194,8 @@ std::string chars_debugWoundSelf(Character* me);       // test: wound our charac
 std::string chars_debugHealGhost(Character* me);       // test: first aid on the copy of the other player's character
 std::string chars_debugHealSelf(Character* me);        // test: control, first aid on our own character
 std::string chars_debugGhostMedical();                 // test: medical state of the player copy
+int chars_shiftBodyClocks(double hours);   // the clock moved: medical time stamps follow (no starvation on join)
+std::string chars_debugVitals();   // test: hunger / blood / dead of each of our characters
 std::string chars_debugFleshSelf(Character* me);       // test: our wounded part
 void chars_debugShopView();                           // test: the shop inventory the trade window would show
 std::string chars_debugClaimNpc(Character* me);         // test (AUTHORITY_PLAN step C): claim the nearest host NPC copy
@@ -341,6 +344,7 @@ void world_onSpeed(const mp::NetEvent& e);      // another player's chosen game 
 void world_onPlayerLeft(uint8_t id);                // forget its chosen speed
 void world_speedTick(DWORD now);                    // vote: everybody on the same speed applies, else x1; free: the latest change applies
 float world_debugSpeedWish();                       // test: the speed we asked for
+std::string world_debugJump(double hours);   // test: the clock jumps that many hours
 void world_debugShift();
 
 // Towns.cpp: world states (unique NPCs dead / jailed) and town changes from the host

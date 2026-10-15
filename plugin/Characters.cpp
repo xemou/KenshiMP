@@ -3549,6 +3549,47 @@ std::string chars_debugGhostMedical()
     }
     return "no player copy";
 }
+// The world clock was moved by `hours` (a client snapping to the host's time, often days ahead when it joins a game
+// further on). The engine drains hunger by the time since MedicalSystem::lastPeriodicUpdate: without this, a 10-day jump
+// starved our characters to death in the next frame (measured: hunger 3 -> -1, dead within a second). The medical time
+// stamps move with the clock, so no time has passed for anyone's body.
+namespace
+{
+    bool safeShiftMedical(Character* c, double hours)
+    {
+        __try
+        {
+            MedicalSystem& m = c->medical;
+            if (m.lastPeriodicUpdate.time > 0) m.lastPeriodicUpdate.time += hours;
+            if (m.lastHungerKO.time > 0) m.lastHungerKO.time += hours;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+}
+int chars_shiftBodyClocks(double hours)
+{
+    std::vector<Character*> all;
+    cs_allActiveCharacters(all);
+    for (size_t i = 0; i < g_local.size(); ++i)   // ours, even if the engine does not list them as active right now
+        if (Character* c = g_local[i].h.getCharacter()) if (std::find(all.begin(), all.end(), c) == all.end()) all.push_back(c);
+    int n = 0;
+    for (size_t i = 0; i < all.size(); ++i) if (all[i] && safeShiftMedical(all[i], hours)) ++n;
+    return n;
+}
+
+std::string chars_debugVitals()
+{
+    std::string out; char b[120];
+    for (size_t i = 0; i < g_local.size() && i < 6; ++i)
+        if (Character* c = g_local[i].h.getCharacter())
+        {
+            sprintf_s(b, "%s hunger %.1f blood %.1f%s%s; ", chat_clean(c->getName()).c_str(), c->medical.hunger, c->medical.blood,
+                      safeDead(c) ? " DEAD" : "", c->medical.isUnconcious() ? " KO" : "");
+            out += b;
+        }
+    return out.empty() ? "no character" : out;
+}
 std::string chars_debugFleshSelf(Character* me)
 {
     float f = -1, bd = -1; safeFlesh(me, 2, &f, &bd);

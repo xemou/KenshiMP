@@ -281,6 +281,16 @@ void world_speedTick(DWORD now)
 }
 
 // Debug (F8 with debug_keys=1): jump the local clock 3 h ahead to verify clock writes.
+// Test (autotest_clock): the clock jumps that many hours, as a client's does when it joins a game further on.
+std::string world_debugJump(double hours)
+{
+    double h = safeRead();
+    if (h < 0 || !safeWrite(h + hours)) return "clock write failed";
+    int n = chars_shiftBodyClocks(hours);
+    char b[120]; sprintf_s(b, "clock %.2f h -> %.2f h, %d character(s) kept in step", h, h + hours, n);
+    return b;
+}
+
 void world_debugShift()
 {
     double h = safeRead();
@@ -307,7 +317,11 @@ void world_onMessage(const NetEvent& e)
     double diff = hostHours - mine;
     if (diff > MAX_DRIFT_HOURS || diff < -MAX_DRIFT_HOURS)
     {
-        if (safeWrite(hostHours)) log("world clock synced to host (%.3f h, was %.3f h)", hostHours, mine);
+        if (safeWrite(hostHours))
+        {
+            int n = chars_shiftBodyClocks(diff);   // a jump of days must not starve anyone (joining a game further on)
+            log("world clock synced to host (%.3f h, was %.3f h), %d character(s) kept in step", hostHours, mine, n);
+        }
         else log("world clock write failed");
     }
 }
