@@ -24,6 +24,7 @@ copy /y plugin\out\KenshiMP_Loader.dll "%D%\" >nul
 copy /y ..\deps\re_release\install\KenshiLib.dll "%D%\" >nul || exit /b 1
 mkdir "%D%\rva\RE_Kenshi\RVAs"
 copy /y tools\rva\Steam_1.0.68.br "%D%\rva\RE_Kenshi\RVAs\Steam_1.0.65.br" >nul
+rem Dedicated servers are not announced in v26: their kit (tools/server, tools/server_list, SERVER_GUIDE.md) is not packaged.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\make_gui_xml.ps1" -Dir "%~dp0%D%" || exit /b 1
 echo Package ready: %~dp0%D%
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\check_package.ps1" -Dir "%~dp0%D%" || exit /b 1

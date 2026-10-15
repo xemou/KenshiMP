@@ -1,0 +1,30 @@
+KenshiMP dedicated server - what it stores about players
+
+Whoever runs a KenshiMP server is responsible for this data. This file says what the server keeps, where, and how
+to delete it. Give it to your players (or link to it from your server description).
+
+Stored on the server PC, in the server's data folder (server_data_dir, by default
+%LOCALAPPDATA%\kenshi\KenshiMP\server):
+
+1. accounts.txt - one line per player name: the name, a random salt and a verifier derived from the password
+   (PBKDF2-HMAC-SHA256, 20 000 rounds). The password itself is never stored and never sent over the network
+   (the login is a challenge/response). Older copies: accounts.txt.1 to .3.
+2. players\<name>.rec - per player name: the characters that player brought (name, race, last position), their
+   inventories and squad money as last seen, and when the player was last seen. Older copies: .rec.1 to .3.
+3. bans.txt - banned player names and IP addresses.
+4. server.log (and server.log.1) - what happened on the server, with player names and the IP address each player
+   connected from, admin commands, refused actions. At most two files of log_max_mb (8 MB by default) each: the
+   oldest lines disappear by themselves.
+5. The world save (server_save) and its timestamped copies in %LOCALAPPDATA%\kenshi\KenshiMP\backups: the Kenshi
+   world, including what players changed in it (buildings, items on the ground...).
+
+Nothing is sent anywhere else, except: if server_list_url is set, the server's name, port, player count and
+version (not player names) are sent to that server list every 30 seconds.
+
+Deleting a player's data ("right to be forgotten"):
+- stop the server (or not: the files are read at login), then delete that player's line in accounts.txt (or type
+  "resetpassword <name>" in the console), delete players\<name>.rec and its .1/.2/.3 copies, and remove the name
+  from bans.txt if it is there;
+- log lines with that name or address go away with the log rotation, or delete server.log and server.log.1.
+
+Players: your own game keeps your own characters in your own saves, as in any Kenshi game.

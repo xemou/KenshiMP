@@ -1,0 +1,47 @@
+# KenshiMP dedicated server settings. Copy these lines into the server PC's
+# %LOCALAPPDATA%\kenshi\KenshiMP\kenshimp.cfg (keep the other lines of that file).
+# The server is a normal Kenshi with KenshiMP: it hosts the world without a player of its own.
+
+mode=server
+port=47000
+# udp: better for many players (a lost packet does not stall the others); the players must set transport=udp too.
+transport=udp
+server_name=My Kenshi server
+server_description=Co-op, friendly, EU
+server_motd=Welcome! Type /admin help if you are an admin.
+max_players=16
+
+# Accounts: each player name gets a password on its first login (players put it in the MULTIPLAYER window,
+# Advanced settings, Password). Admins: account names, comma separated.
+server_accounts=1
+server_admins=MyName
+
+# The world: "continue" loads the server's last save at start, "new" starts a new game the first time.
+server_world=continue
+server_save=kenshimp_server
+server_autosave_min=10
+# A copy of the starting world (a save name) for the "resetworld" command (players keep their characters).
+server_start_save=
+
+# Headless: hide or minimise the window once the world is loaded, cap the frame rate. server_render=0 draws nothing
+# (about 15-20 % of a core less), but the game then updates the NPCs more coarsely: their copies on the players' screens
+# are a few units off (measured: median 3.7 units instead of 0). Keep 1 unless the server PC is short of power.
+server_window=minimize
+server_render=1
+server_fps=30
+server_console=1
+
+# Per player: NPCs sent at most (closest first), KB per second of NPC updates, connections per address.
+server_npc_cap=256
+server_npc_budget=48
+server_max_per_address=4
+# Disconnect a player after that many refused actions (impossible movement, hits from too far). 0 = never.
+server_kick_refusals=0
+
+# Server list (server\list_server.py running somewhere): the server announces itself there every 30 s.
+server_list_url=
+server_public_address=
+
+# Data folder (accounts, bans, player records, server.log, server_commands.txt). Empty = %LOCALAPPDATA%\kenshi\KenshiMP\server
+server_data_dir=
+log_max_mb=8

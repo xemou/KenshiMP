@@ -24,7 +24,7 @@ public:
         std::map<uint32_t, Track>::iterator it = tracks_.find(id);
         if (it == tracks_.end())
         {
-            Track t; t.lastT = t.anchorT = tMs; t.lastX = t.anchorX = x; t.lastZ = t.anchorZ = z;
+            Track t; t.lastT = t.anchorT = tMs; t.lastX = t.anchorX = x; t.lastZ = t.anchorZ = z; t.fast = false;
             tracks_[id] = t;
             return OK;
         }
@@ -44,7 +44,8 @@ public:
         if (dtAnchor < windowMs_) return OK;
         float v = dist(x, z, t.anchorX, t.anchorZ) * 1000.f / (float)dtAnchor;
         t.anchorT = tMs; t.anchorX = x; t.anchorZ = z;
-        if (v > maxSpeed_) { if (speed) *speed = v; return FAST; }
+        t.fast = v > maxSpeed_;
+        if (t.fast) { if (speed) *speed = v; return FAST; }
         return OK;
     }
 
@@ -55,11 +56,17 @@ public:
             if ((uint8_t)(it->first >> 24) == owner) tracks_.erase(it++); else ++it;
     }
     size_t tracked() const { return tracks_.size(); }
+    // The last full window of this entity was too fast (stays so until a window at a normal speed).
+    bool isFast(uint32_t id) const
+    {
+        std::map<uint32_t, Track>::const_iterator it = tracks_.find(id);
+        return it != tracks_.end() && it->second.fast;
+    }
 
 private:
-    struct Track { uint32_t lastT, anchorT; float lastX, lastZ, anchorX, anchorZ; };
+    struct Track { uint32_t lastT, anchorT; float lastX, lastZ, anchorX, anchorZ; bool fast; };
     static float dist(float x1, float z1, float x2, float z2) { float dx = x1 - x2, dz = z1 - z2; return sqrtf(dx * dx + dz * dz); }
-    static void reset(Track& t, uint32_t tMs, float x, float z) { t.lastT = t.anchorT = tMs; t.lastX = t.anchorX = x; t.lastZ = t.anchorZ = z; }
+    static void reset(Track& t, uint32_t tMs, float x, float z) { t.lastT = t.anchorT = tMs; t.lastX = t.anchorX = x; t.lastZ = t.anchorZ = z; t.fast = false; }
     std::map<uint32_t, Track> tracks_;
     float maxSpeed_, maxJump_;
     uint32_t windowMs_;

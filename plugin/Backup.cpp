@@ -150,6 +150,13 @@ void backup_hostSave()
     log("save backup of '%s' started (%s)", game.c_str(), from.c_str());
 }
 
+// Server: copy the save folder again after each periodic save (backup_hostSave copies a save once per load).
+void backup_serverSave()
+{
+    g_lastBackedUp.clear();
+    backup_hostSave();
+}
+
 // Main thread: reports a finished copy.
 void backup_tick()
 {

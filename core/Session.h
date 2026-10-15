@@ -10,6 +10,11 @@
 //    is disconnected;
 //  - the handshake carries the protocol version and the list of active game mods; the host
 //    refuses mismatches (or only warns, see setModList).
+//
+// Transports: TCP (default, games between friends, Steam tunnel) or UDP (dedicated server): a reliable ordered
+// stream plus unreliable sequenced entity states (core/Reliable.h), so one lost datagram never stalls the rest.
+// Dedicated server (setServer): accounts with a challenge/response login (core/Accounts.h), bans, per-address and
+// flood limits, more slots, kick, per-player traffic counters, and a "server info" answer for the server list.
 #pragma once
 #include "Protocol.h"
 #include <map>
@@ -55,7 +60,41 @@ struct NetStats
 {
     uint64_t bytesIn, bytesOut;
     uint32_t statesDropped;      // superseded states skipped for a congested peer
-    NetStats() : bytesIn(0), bytesOut(0), statesDropped(0) {}
+    uint32_t resent, lost;       // UDP: reliable segments sent again, unreliable messages that never completed
+    NetStats() : bytesIn(0), bytesOut(0), statesDropped(0), resent(0), lost(0) {}
+};
+
+// Per connected player (server console, budget logs).
+struct PeerStats
+{
+    uint8_t id;
+    std::string name, address;
+    uint64_t bytesIn, bytesOut;
+    uint32_t statesDropped;
+    unsigned rttMs;              // UDP: smoothed round trip
+    bool admin;
+    uint32_t refused;            // server: states refused (impossible movement, someone else's character)
+    PeerStats() : id(0), bytesIn(0), bytesOut(0), statesDropped(0), rttMs(0), admin(false), refused(0) {}
+};
+
+enum Transport { TRANSPORT_TCP = 0, TRANSPORT_UDP = 1 };
+
+// Dedicated server settings (Session::setServer).
+struct ServerOptions
+{
+    bool dedicated;              // the host is a server, not a player (told to clients in WELCOME)
+    bool accounts;               // name + password per player (dataDirccounts.txt)
+    std::string dataDir;         // accounts.txt, bans.txt
+    std::string name, description;
+    int maxPlayers;              // 1..MAX_PLAYERS-1 (clients)
+    int maxPerAddress;           // connections from one IP address
+    uint32_t maxMessage;         // largest accepted message (bytes)
+    uint32_t maxBytesPerSec;     // incoming per connection; above = disconnected (flood)
+    std::vector<std::string> admins;   // account names allowed to use admin commands
+    bool checkMoves;             // states of a player's characters moving impossibly fast are not relayed (counted per player)
+    int kickAfterRefusals;       // that many refused states -> disconnected (0 = never)
+    ServerOptions() : dedicated(false), accounts(false), maxPlayers(HOST_SLOTS - 1), maxPerAddress(4), maxMessage(MAX_PACKET),
+                      maxBytesPerSec(4 * 1024 * 1024), checkMoves(false), kickAfterRefusals(0) {}
 };
 
 class SessionImpl;
@@ -71,6 +110,16 @@ public:
     void setModList(const std::string& mods, bool strict);
     // Optional shared secret: the host refuses players without the same password ("" = open).
     void setPassword(const std::string& password);
+    // Client: password of our account on dedicated servers (the first login creates the account). With one set, a
+    // dedicated server that does not ask for it securely is refused.
+    void setAccountPassword(const std::string& password);
+    // Before host()/join(). Both sides must use the same transport.
+    void setTransport(Transport t);
+    Transport transport() const;
+    // Host: dedicated server mode (before host()).
+    void setServer(const ServerOptions& o);
+    // Tests: simulated network on our outgoing UDP datagrams (percent lost, added delay).
+    void setNetSimulation(int lossPercent, int lagMs);
 
     bool host(int port, const std::string& name, const std::string& faction, std::string& err);
     // Returns at once; the connection completes on the network thread (EV_CONNECTED), or fails
@@ -85,6 +134,24 @@ public:
     int  pingMs() const;                       // client: last measured round-trip, host: 0
     NetStats stats() const;
     std::vector<PlayerInfo> players() const;   // includes the local player once known
+    // Client: the host is a dedicated server (no player of its own).
+    bool hostIsServer() const;
+
+    // ---- host / dedicated server ----
+    void kick(uint8_t player, const std::string& reason);
+    bool ban(const std::string& nameOrAddress);          // also kicks a connected player of that name / address
+    bool unban(const std::string& nameOrAddress);
+    std::string bans() const;
+    bool isAdmin(uint8_t player) const;
+    std::string address(uint8_t player) const;
+    std::vector<PeerStats> peerStats() const;
+    size_t accountCount() const;
+    bool resetAccount(const std::string& name);
+
+    // Blocking query of a server's description (server list): connects, asks, closes. pingMs = round trip.
+    static bool queryInfo(const std::string& address, int port, Transport t, ServerInfo& out, int& pingMs, std::string& err, int timeoutMs = 2000);
+    // Blocking plain HTTP/1.0 GET of http://host[:port]/path (server list service). body = the response body.
+    static bool httpGet(const std::string& url, std::string& body, std::string& err, int timeoutMs = 5000);
 
     bool pollEvent(NetEvent& out);
 

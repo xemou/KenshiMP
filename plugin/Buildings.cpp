@@ -21,6 +21,7 @@
 #include <kenshi/Character.h>
 #include <kenshi/Damages.h>
 #include <kenshi/ZoneManager.h>
+#include <kenshi/util/UtilityT.h>
 #include <kenshi/FactionRelations.h>
 #include <core/Functions.h>
 
@@ -55,7 +56,8 @@ namespace
         BuildingMsg lastSent;
         bool sent;
         uint32_t inventoryHash;   // storage content (MSG_INVENTORY)
-        LocalBuilding() : ptr(NULL), id(0), sent(false), inventoryHash(0) {}
+        bool unloaded;            // its zone was unloaded here (we went away): it still exists, others keep its last state
+        LocalBuilding() : ptr(NULL), id(0), sent(false), inventoryHash(0), unloaded(false) {}
     };
     std::vector<LocalBuilding> g_local;      // appended from the factory hook (g_lock)
     uint32_t g_nextLocal = 1;
@@ -73,6 +75,7 @@ namespace
     std::map<uint32_t, GhostBuilding> g_ghosts;           // g_lock for lookups from hooks
     volatile bool g_creatingGhost = false;   // our own createBuilding calls are not tracked
     std::vector<hand> g_rejected;            // blueprints refused (overlap), destroyed next tick
+    std::vector<hand> g_staleCopies;         // copies of other players' buildings saved into a zone and loaded back: destroyed next tick
     const float OVERLAP_RADIUS = 3.f;
 
     bool overlapsGhostBuilding(const Ogre::Vector3& p)
@@ -91,6 +94,22 @@ namespace
     {
         __try { return ou->theFactory->createBuilding(gd, *p, NULL, f, *q, NULL, NULL, NULL, NULL, NULL, false, completed, false, 0, false); }
         __except (EXCEPTION_EXECUTE_HANDLER) { return NULL; }
+    }
+    bool safeZoneLoaded(const Ogre::Vector3* p)
+    {
+        __try { return ou->zoneMgr && ou->zoneMgr->isZoneLoadedT(*p); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    // The factory places a building at the given y ABOVE THE GROUND (measured in game: y 1533 asked on ground at 1533
+    // gave a building at 3066). Positions read from buildings are world heights: subtract the ground before creating.
+    float safeTerrainHeight(float x, float z)
+    {
+        __try { return UtilityT::getTerrainHeight(x, z); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return 0.f; }
+    }
+    bool isPlayerCopyFaction(Faction* f)
+    {
+        return f && f->data && f->data->stringID.compare(0, 16, "kenshimp_player_") == 0;
     }
     bool safeSetProgress(Building* b, float progress, bool complete)
     {
@@ -182,6 +201,20 @@ namespace
         std::vector<BuildingMsg> batch;
         std::vector<uint32_t> removed;
         std::vector<Bytes> inventories;
+        // Our buildings whose handle died: is their zone still loaded here? (asked without our lock: the zone loader
+        // thread takes it in the factory hook while it holds the engine's zone lock)
+        std::vector<std::pair<uint32_t, Ogre::Vector3> > dead;
+        {
+            Lock l;
+            for (size_t k = 0; k < g_local.size(); ++k)
+            {
+                LocalBuilding& lb = g_local[k];
+                if (lb.sent && lb.id && !lb.unloaded && (!lb.h.getBuilding() || lb.h.getBuilding() != lb.ptr))
+                    dead.push_back(std::make_pair(lb.id, Ogre::Vector3(lb.lastSent.x, lb.lastSent.y, lb.lastSent.z)));
+            }
+        }
+        std::set<uint32_t> unloadedNow;
+        for (size_t k = 0; k < dead.size(); ++k) if (!safeZoneLoaded(&dead[k].second)) unloadedNow.insert(dead[k].first);
         {
             Lock l;
             for (size_t k = g_local.size(); k-- > 0;)
@@ -190,6 +223,15 @@ namespace
                 Building* b = lb.h.getBuilding();
                 if (!b || b != lb.ptr)
                 {
+                    // Gone because its zone unloaded (we went away), not destroyed: the others keep seeing it with its
+                    // last state, and the factory hook gives it its id back when the zone loads again.
+                    if (!lb.unloaded && unloadedNow.count(lb.id))
+                    { lb.unloaded = true; lb.ptr = NULL; log("our building %08x: zone unloaded here, kept for the others", lb.id); }
+                    if (lb.unloaded)
+                    {
+                        if (lb.id && netIdOwner(lb.id) == g_session.localId() && full) batch.push_back(lb.lastSent);
+                        continue;
+                    }
                     if (lb.id) removed.push_back(lb.id);
                     g_local.erase(g_local.begin() + k);
                     continue;
@@ -228,10 +270,17 @@ namespace
             if (!f || !gd) { log("cannot create building '%s' (missing mod?)", m.gameDataName.c_str()); return; }
             Ogre::Vector3 p(m.x, m.y, m.z);
             Ogre::Quaternion q(m.qw, m.qx, m.qy, m.qz);
+            // Not loaded here (we are far): made when its zone loads (the owner resends everything every 10 s).
+            // A copy made in an unloaded zone would be saved into that zone and come back as a stale duplicate.
+            if (!safeZoneLoaded(&p)) return;
+            float ground = safeTerrainHeight(p.x, p.z);
+            Ogre::Vector3 ask(p.x, p.y - ground, p.z);
             g_creatingGhost = true;
-            b = safeCreate(gd, &p, f, &q, m.completed != 0);
+            b = safeCreate(gd, &ask, f, &q, m.completed != 0);
             g_creatingGhost = false;
             if (!b) { log("createBuilding failed for '%s'", m.gameDataName.c_str()); return; }
+            float got = b->getPosition().y;
+            if (fabsf(got - p.y) > 2.f) log("building copy %08x: made at height %.1f, owner's at %.1f (ground %.1f)", m.netId, got, p.y, ground);
             g.h = hand(b); g.ptr = b;
             g.completed = m.completed != 0;
             if (!g.completed) safeSetProgress(b, m.buildProgress, false);
@@ -351,8 +400,12 @@ void builds_tick(DWORD now)
     worldTick(now);
     if (!g_cfg.syncBuildings) return;
     ::builds_flushDismantle(false);
-    std::vector<hand> rejected;
-    { Lock l; rejected.swap(g_rejected); }
+    std::vector<hand> rejected, stale;
+    { Lock l; rejected.swap(g_rejected); stale.swap(g_staleCopies); }
+    int purged = 0;
+    for (size_t i = 0; i < stale.size(); ++i)
+        if (Building* b = stale[i].getBuilding()) if (!ghostIdOf(b) && safeDestroy(b)) ++purged;
+    if (purged) log("removed %d stale copy building(s) loaded back with a zone", purged);
     for (size_t i = 0; i < rejected.size(); ++i)
         if (Building* b = rejected[i].getBuilding())
             if (safeDestroy(b)) showMessage(T("Cannot build there: another player's building is in the way."));
@@ -361,7 +414,7 @@ void builds_tick(DWORD now)
     {
         g_lastChange = now;
         if (full) { g_lastFull = now; g_forceFull = false; }
-        sync(full);
+        if (!server_isServer()) sync(full);   // a dedicated server has no buildings of a player to share
     }
 }
 
@@ -373,9 +426,16 @@ void builds_resendAll() { g_forceFull = true; worldResendAll(); }
 void builds_onWorldReload()
 {
     worldReset();
-    Lock l;
-    g_ghosts.clear();
-    g_forceFull = true;
+    std::vector<uint32_t> gone;
+    {
+        Lock l;
+        g_ghosts.clear();
+        g_forceFull = true;
+        // ours that were kept while unloaded belonged to the old world: the others drop them (the new world's come back)
+        for (size_t k = g_local.size(); k-- > 0;)
+            if (g_local[k].unloaded) { if (g_local[k].id) gone.push_back(g_local[k].id); g_local.erase(g_local.begin() + k); }
+    }
+    for (size_t k = 0; k < gone.size(); ++k) { ByteWriter w; w.u32(gone[k]); g_session.send(MSG_BUILDING_REMOVE, w.data); }
 }
 
 void builds_onPlayerLeft(uint8_t id)
@@ -454,9 +514,76 @@ void builds_debugSpawn()
     if (!pick) { log("debug building: no building data"); return; }
 
     Ogre::Vector3 p = c->getPosition() + Ogre::Vector3(0, 0, 6);
+    p.y = 0.f;   // on the ground (the factory's y is a height above it)
     Ogre::Quaternion q = Ogre::Quaternion::IDENTITY;
     Building* b = safeCreate(pick, &p, f, &q, true);
     log("debug building '%s' (%s) -> %p", pick->name.c_str(), pick->stringID.c_str(), b);
+}
+
+// Test (autotest_build): a building of ours next to our first character, through the same factory as the game
+// (so the hook tracks it like a placed one). completed=false: a blueprint, as the build menu makes.
+std::string builds_debugPlace(bool completed, float side)
+{
+    std::vector<std::pair<uint32_t, Character*> > locals;
+    chars_localCharacters(locals);
+    Character* c = locals.empty() ? NULL : locals[0].second;
+    Faction* f = ou && ou->player ? ou->player->getFaction() : NULL;
+    if (!c || !f) return "no character";
+    lektor<GameData*> list;
+    ou->gamedata.getDataOfType(list, BUILDING);
+    GameData* pick = NULL;
+    for (uint32_t i = 0; i < list.size() && !pick; ++i)
+        if (list[i] && (list[i]->name.find("Storage") != std::string::npos || list[i]->name.find("storage") != std::string::npos)) pick = list[i];
+    if (!pick && list.size()) pick = list[0];
+    if (!pick) return "no building data";
+    Ogre::Vector3 p = c->getPosition() + Ogre::Vector3(side, 0, completed ? 8.f : -8.f);
+    p.y = 0.f;   // on the ground (the factory's y is a height above it)
+    Ogre::Quaternion q = Ogre::Quaternion::IDENTITY;
+    Building* b = safeCreate(pick, &p, f, &q, completed);
+    char buf[200]; sprintf_s(buf, "'%s' %s at (%.0f,%.0f) -> %s, height %.0f", pick->name.c_str(), completed ? "built" : "blueprint", p.x, p.z, b ? "made" : "FAILED", b ? b->getPosition().y : 0.f);
+    return buf;
+}
+// Test: our blueprints get that much construction progress (what our builders would do).
+std::string builds_debugProgress(float progress)
+{
+    std::vector<Building*> mine;
+    { Lock l; for (size_t i = 0; i < g_local.size(); ++i) if (Building* b = g_local[i].h.getBuilding()) mine.push_back(b); }
+    int n = 0;
+    for (size_t i = 0; i < mine.size(); ++i)
+    {
+        Building::ConstructionState* st = mine[i]->getBuildState();
+        if (st && !st->isComplete && safeSetProgress(mine[i], progress, false)) ++n;
+    }
+    char buf[80]; sprintf_s(buf, "%d blueprint(s) set to %.2f", n, progress);
+    return buf;
+}
+// Test: our buildings and the copies of the other players' ones, with progress / completed / distance from us.
+std::string builds_debugReport()
+{
+    std::vector<std::pair<uint32_t, Character*> > locals;
+    chars_localCharacters(locals);
+    Ogre::Vector3 me = locals.empty() ? Ogre::Vector3::ZERO : locals[0].second->getPosition();
+    std::string out; char b[200];
+    Lock l;
+    int nl = 0, ng = 0;
+    for (size_t i = 0; i < g_local.size(); ++i) if (Building* x = g_local[i].h.getBuilding())
+    {
+        Building::ConstructionState* st = x->getBuildState();
+        Ogre::Vector3 xp = x->getPosition();
+        if (++nl <= 6) { sprintf_s(b, " own %08x %.2f%s at (%.0f,%.0f,%.0f) sent y %.0f;", g_local[i].id, st ? st->constructionProgress : 1.f, st && !st->isComplete ? "" : " done", xp.x, xp.y, xp.z, g_local[i].lastSent.y); out += b; }
+    }
+    for (std::map<uint32_t, GhostBuilding>::iterator it = g_ghosts.begin(); it != g_ghosts.end(); ++it)
+    {
+        Building* x = it->second.h.getBuilding();
+        ++ng;
+        if (!x) { sprintf_s(b, " copy %08x NO BODY;", it->first); out += b; continue; }
+        Building::ConstructionState* st = x->getBuildState();
+        Ogre::Vector3 xp = x->getPosition();
+        sprintf_s(b, " copy %08x %.2f%s at (%.0f,%.0f,%.0f);", it->first, st ? st->constructionProgress : 1.f, st && !st->isComplete ? "" : " done", xp.x, xp.y, xp.z);
+        out += b;
+    }
+    sprintf_s(b, "%d own, %d copies, us at (%.0f,%.0f,%.0f):", nl, ng, me.x, me.y, me.z);
+    return b + out;
 }
 
 } // namespace kmp
@@ -475,6 +602,13 @@ Building* createBuilding_hook(RootObjectFactory* self, GameData* data, Ogre::Vec
 {
     Building* b = createBuilding_orig(self, data, position, t, owner, rotation, cb, furnitureOf, isDoorOf, saveState,
                                       isIndoorsOf, invisible, completed, isFoliage, floorNumber, isOutsideFurniture);
+    // A copy of another player's building that a zone had saved, loaded back with it: the owner's state makes a fresh one.
+    if (b && !g_creatingGhost && saveState && isPlayerCopyFaction(owner) && !furnitureOf && !isDoorOf && !isIndoorsOf && !isFoliage)
+    {
+        Lock l;
+        g_staleCopies.push_back(hand(b));
+        return b;
+    }
     if (b && !g_creatingGhost && owner && owner->isThePlayer() && !furnitureOf && !isDoorOf && !isIndoorsOf && !isFoliage)
     {
         // A new blueprint (not loaded from a save) right on top of another player's building:
@@ -485,8 +619,19 @@ Building* createBuilding_hook(RootObjectFactory* self, GameData* data, Ogre::Vec
             g_rejected.push_back(hand(b));
             return b;
         }
-        LocalBuilding lb; lb.h = hand(b); lb.ptr = b;
         Lock l;
+        // One of ours coming back with its zone: same building, same id (the others never lost it).
+        if (saveState && data)
+            for (size_t i = 0; i < g_local.size(); ++i)
+            {
+                LocalBuilding& u = g_local[i];
+                if (!u.unloaded || u.lastSent.gameDataName != data->stringID) continue;
+                Ogre::Vector3 at(u.lastSent.x, u.lastSent.y, u.lastSent.z);
+                if (at.distance(position) > 1.f) continue;
+                u.h = hand(b); u.ptr = b; u.unloaded = false;
+                return b;
+            }
+        LocalBuilding lb; lb.h = hand(b); lb.ptr = b;
         g_local.push_back(lb);
     }
     return b;

@@ -19,7 +19,7 @@ namespace kmp {
 
 struct Config
 {
-    std::string mode;      // "off", "host" or "join"
+    std::string mode;      // "off", "host", "join" or "server" (dedicated server, Server.cpp)
     std::string address;
     int port;
     std::string name;
@@ -46,6 +46,8 @@ struct Config
     bool loadSharing;      // host: a client far from the host simulates its own surroundings
     bool assaultHostility; // attacking a player's characters outside a war lowers their faction's relation
     bool playerNames;      // other players' characters always show their name above their head
+    int playerNamesRange;  // how far from the camera those names show (0 = any distance)
+    bool speedVote;        // host: a game speed applies only when every player chose it (0 = anybody's change applies to all)
     bool townSync;         // host's world states (unique NPCs dead/jailed) and town changes apply to everybody
     int backupSaves;       // host: backups kept per save (copied when a hosted game is ready), 0 = off
     std::string autotestLoad;  // test: save loaded automatically from the title screen
@@ -53,13 +55,40 @@ struct Config
     int npcRange;              // host: how far around a player the host's NPCs are shown to it (0 = the game's own "npc range", 3250 by default)
     int autotestShots;         // test: save a frame every N seconds (kmp_shot_<role>_<n>.png)
     bool autotestCarry;        // test: carry a knocked-out ghost, then get knocked out and carried
+    bool autotestBuild;        // test: buildings placed on each side, seen on the other; world map opened with the players' names
     bool autotestGotoShop;     // test: the squad is moved next to the nearest shop (shop shelves in reach)
     std::string lobbyKeyName;
+    // Network transport and dedicated servers (DEDICATED_SERVER_PLAN.md)
+    std::string transport;         // "tcp" (default, games between friends) or "udp" (both sides must use the same)
+    std::string accountPassword;   // client: our account password on dedicated servers ("" = use password=)
+    std::string serverName, serverDescription, serverMotd;
+    int maxPlayers;                // server: player slots
+    bool serverAccounts;           // server: name + password per player
+    std::string serverAdmins;      // server: admin account names, separated by commas or spaces
+    std::string serverDataDir;     // server: accounts, bans, player records, command file ("" = <config dir>\server)
+    bool serverConsole;            // server: a console window for admin commands
+    std::string serverWindow;      // server: "normal", "minimize" or "hide" once the world is loaded
+    bool serverRender;             // server: false = the game draws nothing (saves the GPU)
+    int serverFps;                 // server: frame rate cap (0 = none)
+    int serverAutosaveMin;         // server: world saved every N minutes (0 = never automatically)
+    std::string serverSave;        // server: save name used for the world
+    std::string serverStartSave;   // server: save of the starting world ("resetworld")
+    std::string serverWorld;       // server: "continue" (its last save, default) or "new" (a new game) at start
+    std::string serverListUrl;     // server list service (http://host:port/), servers announce there, clients read it
+    std::string serverPublicAddress; // server: address shown in the list ("" = the one the list sees)
+    int serverMaxPerAddress;       // server: connections from one IP address
+    int serverNpcCap;              // server: most NPCs sent to one client (closest first)
+    int serverNpcBudget;           // server: KB per second of NPC states per client (0 = no budget)
+    int logMaxMB;                  // log file rotated above this size (2 files kept)
+    int serverKickRefusals;        // server: that many refused actions (impossible moves, hits from afar) -> kicked (0 = never)
     Config() : mode("off"), address("127.0.0.1"), port(47000), name("Player"), faction("My Faction"),
                relation(0), ghostAI("none"), syncAppearance(true), syncEquipment(true), syncBuildings(true),
                debugKeys(false), npcSync(true), strictMods(false), autoReconnect(true), pauseSync(true),
                renderSmoothing(true), weatherSync(true), lobbyKey(VK_F4), lobbyKeyName("F4"), language("auto"), playersOnMap(true),
-               tuneSpeedMatch(true), tuneTrail(true), tuneRepath(true), tuneUnblock(true), tuneOnScreen(true), ghostNoCollide(false), loadSharing(false), assaultHostility(false), playerNames(true), townSync(true), backupSaves(5), autotest(false), autotestGotoShop(false), autotestCarry(false), autotestShots(0), npcRange(0) {}
+               tuneSpeedMatch(true), tuneTrail(true), tuneRepath(true), tuneUnblock(true), tuneOnScreen(true), ghostNoCollide(false), loadSharing(false), assaultHostility(false), playerNames(true), playerNamesRange(0), speedVote(true), townSync(true), backupSaves(5), autotest(false), autotestGotoShop(false), autotestCarry(false), autotestBuild(false), autotestShots(0), npcRange(0),
+               transport("tcp"), serverName("KenshiMP server"), maxPlayers(16), serverAccounts(true), serverConsole(false), serverWindow("normal"),
+               serverRender(true), serverFps(0), serverAutosaveMin(10), serverSave("kenshimp_server"), serverMaxPerAddress(4), serverNpcCap(256),
+               serverNpcBudget(48), logMaxMB(8), serverKickRefusals(0) {}
 };
 
 extern mp::Session g_session;
@@ -67,6 +96,22 @@ extern Config g_cfg;
 
 // True once we have a valid player id (host: immediately, client: after the handshake).
 bool ready();
+
+// Server.cpp: dedicated server (mode=server) and the client side of it
+bool server_isServer();                          // this game is a dedicated server (it hosts, it has no player of its own)
+void server_configureSession();                  // before host()/join(): transport, accounts, limits
+void server_frame();                             // every frame: frame cap, frame statistics
+void server_tick(DWORD now);                     // console, saves, records, counters, server list
+bool server_onMessage(const mp::NetEvent& e);    // true = consumed (admin command, bag check, notice)
+void server_onPlayerJoined(uint8_t id, const std::string& name);
+void server_onPlayerLeft(uint8_t id);
+void server_clientTick(DWORD now);               // client of a dedicated server: bag fingerprints
+void server_countNpcStates(int sent, int skipped);
+void server_refused(uint8_t player, const char* why);   // server: something a player sent was refused (counted, logged)
+const float MAX_HIT_DISTANCE = 1200.f;                  // server: farther than this from its victim, a hit is refused (longest crossbows ~ 1000)
+bool server_loadSave(const std::string& name);   // KenshiMP.cpp: load a save (resetworld)
+void backup_serverSave();                        // Backup.cpp: copy the current save folder now (timestamped)
+void server_logLine(const char* line);           // server: log file of its own (<data>\server.log, rotated)
 
 void log(const char* fmt, ...);
 void problem(const char* key, const char* fmt, ...);   // a check that failed: "PROBLEM:" line in the log (once a minute per key), kept for the bug report
@@ -119,6 +164,8 @@ int chars_ghostTotal();
 void chars_preFrame();                   // before the engine's frame update
 void chars_renderTick(DWORD now);        // after it, before drawing: render-layer smoothing
 void chars_showPlayerNames();            // other players' names drawn above their characters (player_names)
+std::string chars_debugOpenMap(bool open);  // test: management screen opened on its map tab (or closed)
+void chars_updateMapNames();            // every other player named on the world map at their last known position
 void chars_clearPlayerNames();           // remove those labels (out of game, world reloaded)
 void chars_logRenderStats();
 void chars_releaseGhost(uint32_t id);
@@ -292,7 +339,7 @@ void world_sendNow();                    // host: send the clock at the next tic
 void world_onMessage(const mp::NetEvent& e);
 void world_onSpeed(const mp::NetEvent& e);      // another player's chosen game speed
 void world_onPlayerLeft(uint8_t id);                // forget its chosen speed
-void world_speedTick(DWORD now);                    // everybody on the same speed: it applies, else x1
+void world_speedTick(DWORD now);                    // vote: everybody on the same speed applies, else x1; free: the latest change applies
 float world_debugSpeedWish();                       // test: the speed we asked for
 void world_debugShift();
 
@@ -310,6 +357,9 @@ void npcs_debugAuthority();                                 // test (AUTHORITY_P
 std::string npcs_debugCensus();                               // test: local NPCs, host NPC ghosts, zone state around our first character
 std::string builds_debugShop();       // test: "sid;x;y;z" of the nearest shop building
 std::string builds_debugGotoShop();   // test: moves our squad next to it
+std::string builds_debugPlace(bool completed, float side);   // test: a building / blueprint of ours next to our first character
+std::string builds_debugProgress(float progress);           // test: our blueprints get that construction progress
+std::string builds_debugReport();                           // test: our buildings and the copies of others'
 std::string builds_debugTownDoor();   // test: "sid;x;y;z;door;doorCount" of a nearby town building
 
 // Bounties.cpp: crimes seen in the host's world reach the real character

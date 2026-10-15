@@ -27,3 +27,5 @@ workshop/
 tests/
 third_party/
 graphify-out/
+SERVER_GUIDE.md
+SERVER_GUIDE_FR.md

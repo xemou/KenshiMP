@@ -4,6 +4,7 @@
 // Commands:  /war, /peace, /ally <player|all>  (relation -100 / 0 / 100)   /players
 //            /goto [player]  (our selected characters travel next to that player's; default: the host)
 //            /report  (bug report folder on the desktop, see Report.cpp)
+//            /speed vote|free  (host: game speed by vote, or anybody's change applies to all; see World.cpp)
 #include <kenshi/GameWorld.h>
 #include <kenshi/Globals.h>
 #include <mygui/MyGUI.h>
@@ -196,6 +197,32 @@ namespace
             chat_notice(done);
             return;
         }
+        if (cmd == "/admin")
+        {
+            // Dedicated server: an admin's console command (the server checks the account).
+            if (arg.empty()) { showMessage(T("Type /admin help for the server's commands.")); return; }
+            mp::ByteWriter w; w.u8(HOST_ID); w.str(arg);
+            g_session.send(MSG_ADMIN, w.data);
+            return;
+        }
+        if (cmd == "/speed" || cmd == "/vitesse")
+        {
+            std::string a = lower(arg);
+            bool vote = a == "vote", free_ = a == "free" || a == "libre";
+            if (!g_session.isHost()) { showMessage(T("Only the host chooses how the game speed is set.")); return; }
+            if (vote || free_)
+            {
+                g_cfg.speedVote = vote;
+                world_sendNow();   // the players learn it with the next clock message
+                chat_notice(vote ? T("Game speed: by vote (it changes when every player chose the same).")
+                                 : T("Game speed: free (anybody's change applies to everybody)."));
+                return;
+            }
+            showMessage(g_cfg.speedVote ? T("Game speed: by vote (it changes when every player chose the same).")
+                                        : T("Game speed: free (anybody's change applies to everybody)."));
+            showMessage(T("Type /speed vote or /speed free."));
+            return;
+        }
         if (cmd == "/goto" || cmd == "/aller")
         {
             // No name: the host (clients), or the only other player.
@@ -224,7 +251,7 @@ namespace
             diplomacy_set(who, value);
             return;
         }
-        showMessage(T("Commands: /players, /war <player|all>, /peace <player|all>, /ally <player|all>, /goto [player], /report"));
+        showMessage(T("Commands: /players, /war <player|all>, /peace <player|all>, /ally <player|all>, /goto [player], /speed vote|free, /report"));
     }
 }
 

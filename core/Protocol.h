@@ -16,7 +16,7 @@
 
 namespace mp {
 
-const uint32_t PROTOCOL_VERSION = 25;
+const uint32_t PROTOCOL_VERSION = 26;
 
 // World NPCs replicated by the host use the upper half of the host's local id space.
 const uint32_t NPC_ID_FLAG = 0x800000;
@@ -24,12 +24,13 @@ inline bool isNpcNetId(uint32_t id) { return (id >> 24) == 0 && (id & NPC_ID_FLA
 const uint8_t  HOST_ID          = 0;
 const uint8_t  BROADCAST        = 0xFF;
 const uint32_t MAX_PACKET       = 1u << 20;
-const int      MAX_PLAYERS      = 8;
+const int      MAX_PLAYERS      = 64;      // slot numbers 0..63 (a dedicated server takes up to max_players of them)
+const int      HOST_SLOTS       = 8;       // a game hosted by a player: up to 8 players, as before
 
 enum MsgType
 {
     MSG_HELLO = 1,        // c->h  u32 version, str name, str faction, str mods, u32 passwordHash
-    MSG_WELCOME,          // h->c  u8 yourId, u8 count, {u8 id, str name, str faction}*
+    MSG_WELCOME,          // h->c  u8 yourId, u8 count, {u8 id, str name, str faction}*, then u8 hostFlags (WELCOME_*)
     MSG_PLAYER_JOIN,      // h->c  u8 id, str name, str faction
     MSG_PLAYER_LEAVE,     // h->c  u8 id
     MSG_PING,             // c->h  u32 token
@@ -78,12 +79,38 @@ enum MsgType
     MSG_HEAL,             // u8 targetPlayer, HealMsg : first aid / doctoring given to a copy of the target's character (the owner applies it to the real one)
     MSG_CARRIED,          // u8 targetPlayer, CarriedMsg : the copy of the target's knocked-out character is being carried / caged / put to bed here
     MSG_ESCAPED,          // u8 targetPlayer, u32 netId : the character you caged picked the lock: let it out
-    MSG_SPEED,            // f32 speed : the game speed this player chose (x1, x2, x3); it applies only when everybody chose the same
+    MSG_SPEED,            // f32 speed [u32 change number, u8 who]: the game speed this player chose (x1, x2, x3); vote mode: it applies only when everybody chose the same; free mode (host speed_vote=0): the latest change applies to all
     MSG_AUTH_TABLE,       // h->c the authority table (core/Authority.h): u16 n, {u32 netId, u8 owner, u16 epoch}* : who simulates each entity that is not at its default owner
-    MSG_AUTH_HANDOFF      // h->c u8 targetPlayer, u8 action (HandoffAction), u32 netId, u16 epoch : the host's answer to MSG_NPC_CLAIM (granted / refused / nothing left to hand over)
+    MSG_AUTH_HANDOFF,     // h->c u8 targetPlayer, u8 action (HandoffAction), u32 netId, u16 epoch : the host's answer to MSG_NPC_CLAIM (granted / refused / nothing left to hand over)
+    MSG_BAG_FINGERPRINT,  // c->h u8 HOST_ID, u16 n, {u32 netId, u32 bagHash}* : hash of each of our characters' inventories (server checks its copy)
+    MSG_SERVER_NOTICE,    // h->c u8 targetPlayer (BROADCAST = all), str text : a message of the server / its admin, shown on screen
+    MSG_ADMIN,            // c->h u8 HOST_ID, str command line : an admin's console command (refused unless the account is an admin)
+
+    // --- control messages, never relayed (session layer) ---
+    MSG_CONTROL_FIRST = 200,
+    MSG_AUTH_CHALLENGE = MSG_CONTROL_FIRST, // h->c u8 fresh, str salt, u32 iterations, str nonce   (core/Accounts.h)
+    MSG_AUTH_PROOF,       // c->h str proof
+    MSG_AUTH_RESULT,      // h->c u8 ok, str reason
+    MSG_SERVER_INFO_REQ,  // c->h (instead of HELLO) : "who are you?" (server list ping); the host answers and closes
+    MSG_SERVER_INFO       // h->c ServerInfo
 };
 
-inline bool isRelayed(uint8_t t) { return t >= MSG_ENTITY_STATE; }
+inline bool isRelayed(uint8_t t) { return t >= MSG_ENTITY_STATE && t < MSG_CONTROL_FIRST; }
+
+enum { WELCOME_DEDICATED = 1, WELCOME_ACCOUNTS = 2 };
+
+// What a server says about itself (server list, MSG_SERVER_INFO).
+struct ServerInfo
+{
+    enum Flags { ACCOUNTS = 1, PASSWORD = 2, UDP = 4, DEDICATED = 8 };
+    std::string name, description;
+    uint32_t protocol;
+    uint8_t players, maxPlayers, flags;
+    uint32_t modsHash;          // hash of the mod list (same hash = same mods, same order)
+    ServerInfo() : protocol(0), players(0), maxPlayers(0), flags(0), modsHash(0) {}
+    void write(ByteWriter& w) const { w.str(name); w.str(description); w.u32(protocol); w.u8(players); w.u8(maxPlayers); w.u8(flags); w.u32(modsHash); }
+    void read(ByteReader& r) { name = r.str(); description = r.str(); protocol = r.u32(); players = r.u8(); maxPlayers = r.u8(); flags = r.u8(); modsHash = r.u32(); }
+};
 
 // netId = (owner << 24) | local index.
 inline uint32_t makeNetId(uint8_t owner, uint32_t local) { return ((uint32_t)owner << 24) | (local & 0xFFFFFF); }

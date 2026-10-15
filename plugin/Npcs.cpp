@@ -26,6 +26,7 @@
 #include "../core/LoadSharing.h"
 #include "../core/Authority.h"
 #include "CharSync.h"
+#include "../core/StateCodec.h"
 
 #include <algorithm>
 #include <map>
@@ -455,7 +456,15 @@ namespace
     {
         int mode = MODE_SHARED;
         std::map<uint8_t, int>::iterator prev = g_clientMode.find(client);
-        if (g_cfg.loadSharing)
+        // A dedicated server simulates the world wherever its players are (it has no characters to measure from):
+        // everybody is in the shared world, except where its zone never loaded (zone watch below).
+        if (server_isServer())
+        {
+            if (g_forcedApart.count(client)) mode = MODE_APART;
+            if (prev == g_clientMode.end() || prev->second != mode)
+                log("server: player %d is %s", (int)client, mode == MODE_SHARED ? "in the shared world" : "on its own (the server's zone there did not load)");
+        }
+        else if (g_cfg.loadSharing)
         {
             std::vector<std::pair<uint32_t, Character*> > mine;
             chars_localCharacters(mine);
@@ -514,7 +523,7 @@ namespace
             // The client sees our characters too (their ghosts): what surrounds them must be there as well,
             // otherwise the enemies a friend fights 700 units away are only on the host's side.
             std::vector<Ogre::Vector3> watch = centres;
-            cs_localPositions(watch);
+            if (!server_isServer()) cs_localPositions(watch);
             std::set<Character*> wanted;
             g_diagQueries = g_diagFound = 0;
             collectAround(watch, interestRadius(), wanted);
@@ -544,13 +553,17 @@ namespace
                 order.push_back(std::make_pair(nearest((*w)->getPosition(), watch), *w));
             std::sort(order.begin(), order.end());
             int spawned = 0;
+            // Dedicated server: at most server_npc_cap NPCs per client, the closest (the rest follow when it moves).
+            int cap = server_isServer() && g_cfg.serverNpcCap > 0 ? g_cfg.serverNpcCap : 1 << 30;
+            int current = 0;
+            for (std::map<Character*, Npc>::iterator it = g_npcs.begin(); it != g_npcs.end(); ++it) if (it->second.clients.count(client)) ++current;
             for (size_t o = 0; o < order.size(); ++o)
             {
                 Character* wc = order[o].second;
                 std::set<Character*>::iterator w = wanted.find(wc);
                 std::map<Character*, Npc>::iterator known = g_npcs.find(*w);
-                if ((known == g_npcs.end() || !known->second.clients.count(client)) && spawned >= SPAWN_BUDGET) { wanted.erase(w); continue; }   // not yet: next scan
-                if (known == g_npcs.end() || !known->second.clients.count(client)) ++spawned;
+                if ((known == g_npcs.end() || !known->second.clients.count(client)) && (spawned >= SPAWN_BUDGET || current >= cap)) { wanted.erase(w); continue; }   // not yet: next scan
+                if (known == g_npcs.end() || !known->second.clients.count(client)) { ++spawned; ++current; }
                 std::map<Character*, Npc>::iterator it = g_npcs.find(*w);
                 if (it == g_npcs.end())
                 {
@@ -577,44 +590,78 @@ namespace
                     it->second.clients.erase(client);
                 }
             }
+            // Over the cap (the client moved into a crowd): the farthest go first.
+            if (cap < (1 << 30))
+            {
+                std::vector<std::pair<float, Character*> > mine;
+                for (std::map<Character*, Npc>::iterator it = g_npcs.begin(); it != g_npcs.end(); ++it)
+                    if (it->second.clients.count(client)) mine.push_back(std::make_pair(nearest(it->first->getPosition(), watch), it->first));
+                if ((int)mine.size() > cap)
+                {
+                    std::sort(mine.begin(), mine.end());
+                    for (size_t k = (size_t)cap; k < mine.size(); ++k)
+                    {
+                        Npc& n = g_npcs[mine[k].second];
+                        sendDespawnTo(client, n.id);
+                        n.clients.erase(client);
+                    }
+                }
+            }
         }
+    }
+
+    // Per client: a batch of compact states (core/StateCodec.h) around the first one's position.
+    struct Batch { ByteWriter w; uint16_t n; StateCodec::Base base; Batch() : n(0) {} };
+    std::map<uint8_t, DWORD> g_budgetStart;
+    std::map<uint8_t, int> g_budgetBytes;
+    void flushBatch(uint8_t client, Batch& b)
+    {
+        if (!b.n) return;
+        ByteWriter w; w.u32(GetTickCount()); w.u16((uint16_t)(b.n | STATES_COMPACT));
+        w.f32(b.base.x); w.f32(b.base.y); w.f32(b.base.z); w.bytes(b.w.data);
+        g_session.sendTo(client, MSG_ENTITY_STATE, w.data);
+        g_budgetBytes[client] += (int)w.data.size();
+        b = Batch();
     }
 
     void hostStates()
     {
-        std::map<uint8_t, ByteWriter> bodies;
-        std::map<uint8_t, uint16_t> counts;
+        std::map<uint8_t, Batch> batches;
+        DWORD now = GetTickCount();
+        // Closest NPCs first: when a client's budget runs out, the far ones wait for the next tick.
+        std::vector<std::pair<float, Character*> > order;
         for (std::map<Character*, Npc>::iterator it = g_npcs.begin(); it != g_npcs.end(); ++it)
+            if (!it->second.clients.empty()) order.push_back(std::make_pair(it->second.nearestPlayer, it->first));
+        std::sort(order.begin(), order.end());
+        int budget = server_isServer() && g_cfg.serverNpcBudget > 0 ? g_cfg.serverNpcBudget * 1024 : 0;
+        for (std::map<uint8_t, DWORD>::iterator it = g_budgetStart.begin(); it != g_budgetStart.end(); ++it)
+            if (now - it->second >= 1000) { it->second = now; g_budgetBytes[it->first] = 0; }
+        int sent = 0, skipped = 0;
+        for (size_t o = 0; o < order.size(); ++o)
         {
-            if (it->second.clients.empty()) continue;
+            std::map<Character*, Npc>::iterator it = g_npcs.find(order[o].second);
+            if (it == g_npcs.end()) continue;
             Character* c = it->second.h.getCharacter();
             if (c != it->first) continue;
-            EntityState s;
-            cs_captureState(c, it->second.id, s);
-            DWORD now = GetTickCount();
             Npc& n = it->second;
             if (n.everSent && now - n.lastSentAt < lodPeriod(n.nearestPlayer)) continue;
-            if (n.everSent && now - n.lastSentAt < STATE_REFRESH_MS && nearlySame(s, n.lastSent)) continue;
+            EntityState s;
+            cs_captureState(c, n.id, s);
+            if (n.everSent && now - n.lastSentAt < STATE_REFRESH_MS && nearlySame(s, n.lastSent)) continue;   // unchanged: a keyframe every 2 s only
             n.lastSent = s; n.lastSentAt = now; n.everSent = true;
-            ByteWriter one; s.write(one);
-            for (std::set<uint8_t>::iterator cl = it->second.clients.begin(); cl != it->second.clients.end(); ++cl)
+            for (std::set<uint8_t>::iterator cl = n.clients.begin(); cl != n.clients.end(); ++cl)
             {
-                bodies[*cl].bytes(one.data);
-                ++counts[*cl];
-                if (counts[*cl] >= 150)   // keep packets reasonable
-                {
-                    ByteWriter w; w.u32(GetTickCount()); w.u16(counts[*cl]); w.bytes(bodies[*cl].data);
-                    g_session.sendTo(*cl, MSG_ENTITY_STATE, w.data);
-                    bodies[*cl] = ByteWriter(); counts[*cl] = 0;
-                }
+                if (!g_budgetStart.count(*cl)) { g_budgetStart[*cl] = now; g_budgetBytes[*cl] = 0; }
+                if (budget && g_budgetBytes[*cl] + (int)batches[*cl].w.data.size() > budget) { ++skipped; continue; }
+                Batch& b = batches[*cl];
+                if (!b.n) b.base = StateCodec::Base(s.x, s.y, s.z);
+                StateCodec::write(b.w, s, b.base);
+                ++b.n; ++sent;
+                if (b.n >= 150) flushBatch(*cl, b);   // keep packets reasonable
             }
         }
-        for (std::map<uint8_t, uint16_t>::iterator it = counts.begin(); it != counts.end(); ++it)
-        {
-            if (!it->second) continue;
-            ByteWriter w; w.u32(GetTickCount()); w.u16(it->second); w.bytes(bodies[it->first].data);
-            g_session.sendTo(it->first, MSG_ENTITY_STATE, w.data);
-        }
+        for (std::map<uint8_t, Batch>::iterator it = batches.begin(); it != batches.end(); ++it) flushBatch(it->first, it->second);
+        if (server_isServer()) server_countNpcStates(sent, skipped);
     }
 
     // Looks of every NPC are checked once per LOOKS_PERIOD_MS, a slice per call (LOOKS_SLICES

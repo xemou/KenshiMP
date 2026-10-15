@@ -12,6 +12,7 @@
 #include <mygui/MyGUI.h>
 
 #include "Shared.h"
+#include "../core/ServerList.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -75,6 +76,49 @@ namespace
     MyGUI::Widget* g_dipPanel = NULL;
     std::string g_dipShown;   // signature of what the rows show (players + relations)
 
+    // Server list (dedicated servers, server_list_url): read and pinged by a worker thread, shown in the panel.
+    bool g_serversMode = false;
+    int g_serverJoin = -1;                           // row whose JOIN was pressed (handled in lobby_tick)
+    CRITICAL_SECTION g_srvLock; bool g_srvLockInit = false;
+    std::vector<ServerEntry> g_servers;              // guarded by g_srvLock
+    std::string g_srvStatus;                         // guarded by g_srvLock
+    volatile LONG g_srvBusy = 0;
+    DWORD g_srvFetchedAt = 0;
+    void srvLock() { if (!g_srvLockInit) { InitializeCriticalSection(&g_srvLock); g_srvLockInit = true; } EnterCriticalSection(&g_srvLock); }
+    void srvUnlock() { LeaveCriticalSection(&g_srvLock); }
+    DWORD WINAPI serverListThread(LPVOID p)
+    {
+        std::string* url = (std::string*)p;
+        std::string body, err;
+        bool ok = Session::httpGet(*url + "list", body, err, 5000);
+        delete url;
+        std::vector<ServerEntry> list = ok ? parseServerList(body) : std::vector<ServerEntry>();
+        srvLock(); g_servers = list; g_srvStatus = ok ? (list.empty() ? std::string(T("No server in the list right now.")) : std::string()) : TF("Server list unreachable: %s", err.c_str()); srvUnlock();
+        for (size_t i = 0; i < list.size() && i < 40; ++i)
+        {
+            ServerInfo info; int ping = -1; std::string e;
+            bool answered = Session::queryInfo(list[i].address, list[i].port, list[i].transport == "udp" ? TRANSPORT_UDP : TRANSPORT_TCP, info, ping, e, 1500);
+            srvLock();
+            if (i < g_servers.size() && g_servers[i].address == list[i].address && g_servers[i].port == list[i].port)
+            { g_servers[i].pingMs = answered ? ping : -2; if (answered) { g_servers[i].info = info; g_servers[i].players = info.players; g_servers[i].maxPlayers = info.maxPlayers; g_servers[i].version = info.protocol; } }
+            srvUnlock();
+        }
+        InterlockedExchange(&g_srvBusy, 0);
+        return 0;
+    }
+    void fetchServers()
+    {
+        if (g_srvBusy) return;
+        std::string url = g_cfg.serverListUrl;
+        if (url.empty()) { srvLock(); g_servers.clear(); g_srvStatus = T("No server list set: add server_list_url=http://<list address>/ to kenshimp.cfg, or join a server by address (Advanced settings)."); srvUnlock(); return; }
+        if (url[url.size() - 1] != '/') url += "/";
+        InterlockedExchange(&g_srvBusy, 1);
+        g_srvFetchedAt = GetTickCount();
+        srvLock(); g_srvStatus = T("Reading the server list..."); srvUnlock();
+        HANDLE h = CreateThread(NULL, 0, serverListThread, new std::string(url), 0, NULL);
+        if (h) CloseHandle(h); else InterlockedExchange(&g_srvBusy, 0);
+    }
+
     DWORD g_escapeClosedAt = 0;   // Escape closed us: the game may also open its pause menu with it
     void onKey(MyGUI::Widget*, MyGUI::KeyCode key, MyGUI::Char)
     {
@@ -91,7 +135,9 @@ namespace
             g_dipValue = k == 'w' ? -100.f : k == 'a' ? 100.f : k == 't' ? 1000.f : k == 'g' ? 2000.f : 0.f;   // 't': trade, 'g': go to
             return;
         }
-        if (n == "KMP_SteamFriends") { g_friendsMode = !g_friendsMode; g_dipShown.clear(); return; }
+        if (n == "KMP_SteamFriends") { g_friendsMode = !g_friendsMode; g_serversMode = false; g_dipShown.clear(); return; }
+        if (n == "KMP_Servers") { g_serversMode = !g_serversMode; g_friendsMode = false; g_dipShown.clear(); if (g_serversMode) fetchServers(); return; }
+        if (n.compare(0, 8, "KMP_Srv_") == 0) { g_serverJoin = atoi(n.c_str() + 8); return; }
         if (n == "KMP_Report") { g_reportRequested = true; return; }
         if (n.compare(0, 8, "KMP_Inv_") == 0)
         {
@@ -212,7 +258,11 @@ namespace
                 g_port = field(c, y + 6 + ROW, "Port", port);
                 g_password = field(c, y + 6 + 2 * ROW, "Password", g_cfg.password);
                 g_password->setEditPassword(true);
-                button(c, PAD, y + 6 + 3 * ROW, W - 2 * PAD - 16, "Join by address", "KMP_Join");
+                int half = (W - 2 * PAD - 16 - 8) / 2;
+                // Dedicated servers are not announced in v26: the server list only shows up once a list address is set.
+                bool listShown = !g_cfg.serverListUrl.empty() || g_serversMode;
+                button(c, PAD, y + 6 + 3 * ROW, listShown ? half : 2 * half + 8, "Join by address", "KMP_Join");
+                if (listShown) button(c, PAD + half + 8, y + 6 + 3 * ROW, half, g_serversMode ? "Players" : "Server list", "KMP_Servers");
                 y += advExtra;
             }
 
@@ -386,9 +436,54 @@ namespace
         catch (...) {}
     }
 
+    // Dedicated servers of the list: name, players, ping, JOIN (only when the version matches).
+    void refreshServers()
+    {
+        if (!g_srvBusy && GetTickCount() - g_srvFetchedAt > 30000) fetchServers();
+        std::vector<ServerEntry> rows; std::string status;
+        srvLock(); rows = g_servers; status = g_srvStatus; srvUnlock();
+        std::string sig = "servers:" + status;
+        for (size_t i = 0; i < rows.size(); ++i) { char b[160]; sprintf_s(b, "%s:%d:%d:%d:%d;", rows[i].address.c_str(), rows[i].port, rows[i].players, rows[i].pingMs, (int)rows[i].version); sig += b; }
+        if (sig == g_dipShown) return;
+        g_dipShown = sig;
+        try
+        {
+            while (g_dipPanel->getChildCount() > 0) MyGUI::Gui::getInstance().destroyWidget(g_dipPanel->getChildAt(0));
+            int w = g_dipPanel->getWidth(), bw = 90;
+            size_t shown = 0;
+            if (!status.empty() || rows.empty())
+            {
+                MyGUI::TextBox* t = g_dipPanel->createWidget<MyGUI::TextBox>("Kenshi_TextboxStandardText", MyGUI::IntCoord(0, 0, w, DIP_ROW_H - 4), MyGUI::Align::Default);
+                std::string esc; for (size_t k = 0; k < status.size(); ++k) { if (status[k] == '#') esc += '#'; esc += status[k]; }
+                t->setCaption(MyGUI::UString(esc.empty() ? std::string(T("No server in the list right now.")) : esc));
+                shown = 1;
+            }
+            for (size_t i = 0; i < rows.size() && shown < (size_t)g_dipRows; ++i, ++shown)
+            {
+                int y = (int)shown * DIP_ROW_H;
+                const ServerEntry& e = rows[i];
+                char info[200];
+                std::string ping = e.pingMs >= 0 ? TF("%d ms", e.pingMs) : (e.pingMs == -2 ? std::string(T("no answer")) : std::string("..."));
+                sprintf_s(info, "%s  %d/%d  %s%s", e.name.c_str(), e.players, e.maxPlayers, ping.c_str(),
+                          e.compatible() ? "" : TF("  (v%u, you have v%u)", e.version, (unsigned)PROTOCOL_VERSION).c_str());
+                std::string label = info, esc;
+                for (size_t k = 0; k < label.size(); ++k) { if (label[k] == '#') esc += '#'; esc += label[k]; }
+                MyGUI::TextBox* t = g_dipPanel->createWidget<MyGUI::TextBox>("Kenshi_TextboxStandardText", MyGUI::IntCoord(0, y, w - bw - 6, DIP_ROW_H - 4), MyGUI::Align::Default);
+                t->setCaption(MyGUI::UString(esc));
+                if (!e.compatible()) continue;
+                char name[32]; sprintf_s(name, "KMP_Srv_%d", (int)i);
+                MyGUI::Button* b = g_dipPanel->createWidget<MyGUI::Button>("Kenshi_Button1", MyGUI::IntCoord(w - bw, y, bw, DIP_ROW_H - 4), MyGUI::Align::Default, name);
+                b->setCaption(T("Join"));
+                b->eventMouseButtonClick += MyGUI::newDelegate(onButton);
+            }
+        }
+        catch (...) {}
+    }
+
     void refreshDiplomacy()
     {
         if (!g_dipPanel) return;
+        if (g_serversMode) { refreshServers(); return; }
         if (g_friendsMode) { refreshFriends(); return; }
         std::vector<PlayerInfo> ps = g_session.players();
         std::string sig;
@@ -657,6 +752,19 @@ void lobby_tick()
 {
     Action a = g_action;
     g_action = NONE;
+    if (g_serverJoin >= 0)
+    {
+        int i = g_serverJoin; g_serverJoin = -1;
+        ServerEntry e; bool found = false;
+        srvLock(); if (i < (int)g_servers.size()) { e = g_servers[i]; found = true; } srvUnlock();
+        if (found && readFields())
+        {
+            g_cfg.address = e.address; g_cfg.port = e.port; g_cfg.transport = e.transport;
+            g_lastError = TF("Joining %s (%s:%d)... A server with accounts uses your Password (Advanced settings): the first login creates your account.", e.name.c_str(), e.address.c_str(), e.port);
+            log("lobby: joining server '%s' %s:%d (%s)", e.name.c_str(), e.address.c_str(), e.port, e.transport.c_str());
+            mp_start("join");
+        }
+    }
     switch (a)
     {
     case HOST:

@@ -53,6 +53,7 @@
 #include <core/Functions.h>
 
 #include "Shared.h"
+#include "../core/StateCodec.h"
 #include "CharSync.h"
 #include "../core/Authority.h"
 #include "../core/Interp.h"
@@ -517,6 +518,8 @@ namespace
 
     void refreshLocalCharacters()
     {
+        // A dedicated server has no player of its own: its squad (the game needs one) is never shown to anybody.
+        if (server_isServer()) { if (!g_local.empty()) { Lock l; g_local.clear(); } return; }
         // Our ids carry our player number: after a reconnect under another number (or hosting
         // after having been a client), the old ids would be refused by everyone. Re-key them.
         if (ready())
@@ -2982,7 +2985,6 @@ void chars_preFrame()
 // screen and far away.
 namespace
 {
-    const float NAME_MAX_DISTANCE = 1500.f;  // from the camera (was 300: a friend further away could not be found)
     const float NAME_HEAD_HEIGHT = 16.f;     // above the character's position: a human is ~14 world units tall (measured on the game's frames: 2.3 put the label at the feet)
     const int NAME_W = 320, NAME_H = 26;
 
@@ -3588,6 +3590,153 @@ bool chars_screenshot(const std::string& file)
     return safeWriteShot(file.c_str());
 }
 
+// --------------------------------------------------------------------------- names on the world map
+// Every other player is named on the game's map at their last reported position, wherever they are: their squad
+// marker only exists while their characters have a body here (near our own), a friend at the other end of the world
+// had none. Labels are children of the map picture, so they scroll with it; the position comes from the map's own
+// world -> map conversion every frame the map is open (zoom).
+namespace
+{
+    struct MapAccess : public MapScreen
+    {
+        MyGUI::IntPoint toMap(const Ogre::Vector3& p) { return worldToMapCoords(p); }
+    };
+    bool safeToMap(MapScreen* m, const Ogre::Vector3* p, int* x, int* y)
+    {
+        __try { MyGUI::IntPoint q = static_cast<MapAccess*>(m)->toMap(*p); *x = q.left; *y = q.top; return true; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    // the map picture that exists now (open or not), and the map screen when it is open
+    MapScreen* safeOpenMap(MyGUI::ImageBox** image)
+    {
+        __try
+        {
+            ManagementScreen* ms = ManagementScreen::getSingleton();
+            if (!ms || !ms->mapScreen) return NULL;
+            *image = ms->mapScreen->mapImage;
+            if (!*image || !ms->getVisible() || !ms->mapScreen->getVisible()) return NULL;
+            return ms->mapScreen;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return NULL; }
+    }
+    const int MAP_LABEL_W = 240, MAP_LABEL_H = 44;
+    struct MapLabel { MyGUI::EditBox* w; std::string text; MapLabel() : w(NULL) {} };
+    std::map<int, MapLabel> g_mapLabels;          // player id (-1: ourselves, test runs only)
+    MyGUI::ImageBox* g_mapParent = NULL;          // the map picture they were made in
+    bool g_mapLabelsFailed = false;
+    DWORD g_mapLogAt = 0;
+
+    void dropMapLabels(bool destroy)
+    {
+        if (destroy)
+            for (std::map<int, MapLabel>::iterator it = g_mapLabels.begin(); it != g_mapLabels.end(); ++it)
+                try { if (it->second.w) MyGUI::Gui::getInstance().destroyWidget(it->second.w); } catch (...) {}
+        g_mapLabels.clear();
+    }
+    MyGUI::EditBox* createMapLabel(MyGUI::ImageBox* parent)
+    {
+        try
+        {
+            MyGUI::EditBox* w = parent->createWidget<MyGUI::EditBox>("Kenshi_WordWrapEmpty", MyGUI::IntCoord(0, 0, MAP_LABEL_W, MAP_LABEL_H), MyGUI::Align::Default);
+            if (!w) return NULL;
+            w->setEditMultiLine(true);
+            w->setEditWordWrap(false);
+            w->setEditReadOnly(true);
+            w->setTextAlign(MyGUI::Align::Center | MyGUI::Align::Bottom);
+            w->setTextShadow(true);
+            w->setTextColour(MyGUI::Colour(1.f, 1.f, 1.f));
+            w->setNeedMouseFocus(false);
+            w->setNeedKeyFocus(false);
+            return w;
+        }
+        catch (...) { return NULL; }
+    }
+}
+
+void chars_updateMapNames()
+{
+    MyGUI::ImageBox* image = NULL;
+    MapScreen* map = g_mapLabelsFailed ? NULL : safeOpenMap(&image);
+    // Another map picture (the world was reloaded): the old labels died with the old one, forget them untouched.
+    if (image != g_mapParent) { dropMapLabels(false); g_mapParent = image; }
+    if (!map)
+    {
+        for (std::map<int, MapLabel>::iterator it = g_mapLabels.begin(); it != g_mapLabels.end(); ++it)
+            try { if (it->second.w) it->second.w->setVisible(false); } catch (...) {}
+        return;
+    }
+
+    // who: every other player we know a position of (not at war, as the squad markers), plus ourselves in test runs
+    std::vector<std::pair<int, Ogre::Vector3> > who;
+    std::vector<std::string> names;
+    Faction* mine = ou && ou->player ? ou->player->getFaction() : NULL;
+    std::vector<PlayerInfo> ps = g_session.players();
+    for (size_t i = 0; i < ps.size(); ++i)
+    {
+        if (ps[i].id == g_session.localId()) continue;
+        Ogre::Vector3 at;
+        if (!chars_playerPosition(ps[i].id, at)) continue;
+        Faction* f = factionFor(ps[i].id);
+        if (!g_cfg.playersOnMap || (mine && mine->relations && f && mine->relations->getFactionRelation(f) < 0.f)) continue;
+        who.push_back(std::make_pair((int)ps[i].id, at));
+        names.push_back(std::string(chat_playerColour(ps[i].id)) + chat_clean(ps[i].name));
+    }
+    if (g_cfg.autotest && !g_local.empty())
+        if (Character* me = g_local[0].h.getCharacter()) { who.push_back(std::make_pair(-1, me->getPosition())); names.push_back("#FFFF00(you)"); }
+
+    std::set<int> seen;
+    bool logNow = g_cfg.autotest && GetTickCount() - g_mapLogAt > 5000;
+    if (logNow) g_mapLogAt = GetTickCount();
+    for (size_t i = 0; i < who.size(); ++i)
+    {
+        int x, y;
+        if (!safeToMap(map, &who[i].second, &x, &y)) { g_mapLabelsFailed = true; log("map names: world -> map conversion failed, disabled"); dropMapLabels(true); return; }
+        seen.insert(who[i].first);
+        MapLabel& l = g_mapLabels[who[i].first];
+        if (!l.w)
+        {
+            l.w = createMapLabel(image); l.text.clear();
+            if (!l.w) { g_mapLabelsFailed = true; log("map names: could not create a label, disabled"); g_mapLabels.erase(who[i].first); dropMapLabels(true); return; }
+        }
+        std::string text = names[i] + "\n+";   // the "+" sits on the spot, the name above it
+        try
+        {
+            if (text != l.text) { l.text = text; l.w->setCaption(text); }
+            l.w->setPosition(x - MAP_LABEL_W / 2, y - MAP_LABEL_H + 12);
+            l.w->setVisible(true);
+        }
+        catch (...) {}
+        if (logNow)
+        {
+            MyGUI::IntSize sz(0, 0); try { sz = image->getSize(); } catch (...) {}
+            log("map names: player %d at world (%.0f,%.0f) -> map (%d,%d), map picture %dx%d", who[i].first, who[i].second.x, who[i].second.z, x, y, sz.width, sz.height);
+        }
+    }
+    for (std::map<int, MapLabel>::iterator it = g_mapLabels.begin(); it != g_mapLabels.end(); )
+        if (!seen.count(it->first)) { try { if (it->second.w) MyGUI::Gui::getInstance().destroyWidget(it->second.w); } catch (...) {} g_mapLabels.erase(it++); }
+        else ++it;
+}
+
+// Test: open (or close) the management screen on its map tab, the way the map key does.
+std::string chars_debugOpenMap(bool open)
+{
+    try
+    {
+        ManagementScreen* ms = ManagementScreen::getSingleton();
+        if (!ms || !ms->mapScreen || !ms->tabs) return "no management screen";
+        if (!open) { ms->setVisible(false, ms->getCurrentTab()); return "closed"; }
+        // the map tab: the tab item that holds the map widget
+        int tab = -1;
+        for (MyGUI::Widget* w = ms->mapScreen->mainWidget; w && tab < 0; w = w->getParent())
+            if (MyGUI::TabItem* ti = w->castType<MyGUI::TabItem>(false)) tab = (int)ms->tabs->getItemIndex(ti);
+        if (tab < 0) return "map tab not found";
+        ms->setVisible(true, tab);
+        char b[120]; sprintf_s(b, "opened on tab %d of %d, map visible %d", tab, (int)ms->tabs->getItemCount(), (int)ms->mapScreen->getVisible());
+        return b;
+    }
+    catch (...) { return "exception"; }
+}
+
 void chars_clearPlayerNames()
 {
     for (std::map<uint32_t, NameLabel>::iterator it = g_names.begin(); it != g_names.end(); ++it) destroyName(it->second);
@@ -3611,7 +3760,8 @@ void chars_showPlayerNames()
     {
         if (isNpcNetId(it->first)) continue;
         Character* c = it->second.h.getCharacter();
-        if (!c) continue;
+        // too far to have a body here: still named, at the owner's last reported position
+        if (!c && (!it->second.knownAt || !it->second.hasSpawn)) continue;
         seen.insert(it->first);
         NameLabel& l = g_names[it->first];
         if (!l.w)
@@ -3633,14 +3783,14 @@ void chars_showPlayerNames()
 
         // Where the model is drawn (render smoothing may draw it off the simulated body).
         Ghost& g = it->second;
-        Ogre::Vector3 at = g_cfg.renderSmoothing && g.hasVisual && g.blend > 0.f ? g.lastDrawn : c->getPosition();
-        g_nameFeet[0] = at.x; g_nameFeet[1] = at.y; g_nameFeet[2] = at.z; g_nameTag = safeTagHeight(c);
+        Ogre::Vector3 at = !c ? g.knownPos : (g_cfg.renderSmoothing && g.hasVisual && g.blend > 0.f ? g.lastDrawn : c->getPosition());
+        g_nameFeet[0] = at.x; g_nameFeet[1] = at.y; g_nameFeet[2] = at.z; g_nameTag = c ? safeTagHeight(c) : NAME_HEAD_HEIGHT;
         at.y += g_nameTag;
         at -= rebase;                  // world -> render space
         Ogre::Vector3 v = view * at;   // camera space: the camera looks down -Z
         g_nameCam[0] = camPos.x; g_nameCam[1] = camPos.y; g_nameCam[2] = camPos.z; g_nameAt[0] = at.x; g_nameAt[1] = at.y; g_nameAt[2] = at.z; g_nameV[0] = v.x; g_nameV[1] = v.y; g_nameV[2] = v.z;
         if (v.z > -0.5f) { ++g_nameBehind; hideName(l); continue; }
-        if (camPos.distance(at) > NAME_MAX_DISTANCE) { ++g_nameFar; hideName(l); continue; }
+        if (g_cfg.playerNamesRange > 0 && camPos.distance(at) > (float)g_cfg.playerNamesRange) { ++g_nameFar; hideName(l); continue; }
         Ogre::Vector3 p = proj * v;    // normalised device coordinates (-1..1)
         if (p.x < -1.1f || p.x > 1.1f || p.y < -1.1f || p.y > 1.1f) { ++g_nameOff; hideName(l); continue; }
         g_nameP[0] = p.x; g_nameP[1] = p.y;
@@ -3658,7 +3808,7 @@ void chars_showPlayerNames()
             g_nameBoxPx[0] = x; g_nameBoxPx[1] = y;
         }
 
-        std::string text = std::string(chat_playerColour(netIdOwner(it->first))) + chat_clean(c->getName());
+        std::string text = std::string(chat_playerColour(netIdOwner(it->first))) + chat_clean(c ? c->getName() : g.spawn.displayName);
         try
         {
             if (text != l.text) { l.text = text; l.w->setCaption(text); }
@@ -3868,15 +4018,16 @@ void chars_onMessage(const NetEvent& e)
     case MSG_ENTITY_STATE:
     {
         uint32_t senderMs = r.u32();
-        uint16_t n = r.u16();
-        if (!r.ok()) break;
+        std::vector<EntityState> states;
+        StateCodec::readAll(r, states);   // full or compact form (core/StateCodec.h)
+        if (states.empty()) break;
         ClockSync& clock = g_clocks[e.sender];
         clock.observe(senderMs, (uint32_t)preciseTick());
         double snapT = clock.toLocal(senderMs);
-        for (int i = 0; i < n && r.ok(); ++i)
+        for (size_t i = 0; i < states.size(); ++i)
         {
-            EntityState s; s.read(r);
-            if (!r.ok() || !s.sanitize()) continue;
+            EntityState& s = states[i];
+            if (!s.sanitize()) continue;
             if (!auth_checkSender(s.netId, e.sender)) continue;   // only the entity's owner simulates it (core/Authority.h)
             if (g_session.isHost() && !isNpcNetId(s.netId)) checkMovement(e.sender, s, senderMs);
             applyGhostState(s, snapT);
@@ -3940,6 +4091,14 @@ void chars_onMessage(const NetEvent& e)
         uint8_t target = r.u8();
         DamageMsg d; d.read(r);
         d.sanitize();
+        if (r.ok() && target == g_session.localId() && server_isServer())
+        {
+            // Dedicated server: a hit only counts from one of the sender's own characters, within reach of the victim.
+            Character* attacker = d.attackerNetId ? chars_byNetId(d.attackerNetId) : NULL;
+            Character* victim = chars_byNetId(d.victimNetId);
+            if (d.attackerNetId && netIdOwner(d.attackerNetId) != e.sender && !isNpcNetId(d.attackerNetId)) { server_refused(e.sender, "damage dealt by someone else's character"); break; }
+            if (attacker && victim && attacker->getPosition().distance(victim->getPosition()) > MAX_HIT_DISTANCE) { server_refused(e.sender, "damage from too far away"); break; }
+        }
         if (r.ok() && target == g_session.localId()) applyIncomingDamage(d, e.sender);
         break;
     }

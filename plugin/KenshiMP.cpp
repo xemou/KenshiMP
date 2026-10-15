@@ -193,10 +193,13 @@ namespace
             else if (k == "town_sync") g_cfg.townSync = toBool(v);
             else if (k == "backup_saves") { int n = atoi(v.c_str()); g_cfg.backupSaves = n < 0 ? 0 : (n > 50 ? 50 : n); }
             else if (k == "player_names") g_cfg.playerNames = toBool(v);
+            else if (k == "player_names_range") { int n = atoi(v.c_str()); g_cfg.playerNamesRange = n < 0 ? 0 : n; }
+            else if (k == "speed_vote") g_cfg.speedVote = toBool(v);
             else if (k == "autotest_load") g_cfg.autotestLoad = v;
             else if (k == "autotest") g_cfg.autotest = toBool(v);
         else if (k == "autotest_goto_shop") g_cfg.autotestGotoShop = toBool(v);
         else if (k == "autotest_carry") g_cfg.autotestCarry = toBool(v);
+        else if (k == "autotest_build") g_cfg.autotestBuild = toBool(v);
         else if (k == "npc_range") g_cfg.npcRange = atoi(v.c_str());
         else if (k == "autotest_shots") g_cfg.autotestShots = atoi(v.c_str());
             else if (k == "lobby_key")
@@ -206,8 +209,34 @@ namespace
                 { g_cfg.lobbyKey = VK_F1 + atoi(v.c_str() + 1) - 1; g_cfg.lobbyKeyName = "F" + v.substr(1); }
             }
             else if (k == "password") g_cfg.password = v;
+            else if (k == "transport") g_cfg.transport = (v == "udp" || v == "UDP") ? "udp" : "tcp";
+            else if (k == "account_password") g_cfg.accountPassword = v;
+            else if (k == "server_name") g_cfg.serverName = v.substr(0, 60);
+            else if (k == "server_description") g_cfg.serverDescription = v.substr(0, 200);
+            else if (k == "server_motd") g_cfg.serverMotd = v.substr(0, 400);
+            else if (k == "max_players") { int n = atoi(v.c_str()); g_cfg.maxPlayers = n < 1 ? 1 : (n > MAX_PLAYERS - 1 ? MAX_PLAYERS - 1 : n); }
+            else if (k == "server_accounts") g_cfg.serverAccounts = toBool(v);
+            else if (k == "server_admins") { std::string a = v; for (size_t i = 0; i < a.size(); ++i) if (a[i] == ',' || a[i] == ';') a[i] = ' '; g_cfg.serverAdmins = a; }
+            else if (k == "server_data_dir") g_cfg.serverDataDir = v;
+            else if (k == "server_console") g_cfg.serverConsole = toBool(v);
+            else if (k == "server_window") g_cfg.serverWindow = v;
+            else if (k == "server_render") g_cfg.serverRender = toBool(v);
+            else if (k == "server_fps") g_cfg.serverFps = atoi(v.c_str());
+            else if (k == "server_autosave_min") g_cfg.serverAutosaveMin = atoi(v.c_str());
+            else if (k == "server_save") g_cfg.serverSave = v;
+            else if (k == "server_start_save") g_cfg.serverStartSave = v;
+            else if (k == "server_world") g_cfg.serverWorld = v;
+            else if (k == "server_list_url") g_cfg.serverListUrl = v;
+            else if (k == "server_public_address") g_cfg.serverPublicAddress = v;
+            else if (k == "server_max_per_address") g_cfg.serverMaxPerAddress = atoi(v.c_str());
+            else if (k == "server_npc_cap") g_cfg.serverNpcCap = atoi(v.c_str());
+            else if (k == "server_npc_budget") g_cfg.serverNpcBudget = atoi(v.c_str());
+            else if (k == "log_max_mb") g_cfg.logMaxMB = atoi(v.c_str());
+            else if (k == "server_kick_refusals") g_cfg.serverKickRefusals = atoi(v.c_str());
         }
         fclose(f);
+        // A dedicated server gets into its world by itself: CONTINUE (its last save) or a NEW GAME, pressed by name.
+        if (g_cfg.mode == "server" && g_cfg.autotestLoad.empty()) g_cfg.autotestLoad = g_cfg.serverWorld.empty() ? "continue" : g_cfg.serverWorld;
     }
 
     // Rewrites the connection keys in kenshimp.cfg, keeping every other line and comment.
@@ -229,9 +258,9 @@ namespace
             fclose(f);
         }
         char port[16]; sprintf_s(port, "%d", g_cfg.port);
-        const char* keys[] = { "mode", "address", "port", "name", "faction", "password" };
-        std::string vals[] = { g_cfg.mode, g_cfg.address, port, g_cfg.name, g_cfg.faction, g_cfg.password };
-        for (int k = 0; k < 6; ++k)
+        const char* keys[] = { "mode", "address", "port", "name", "faction", "password", "transport" };
+        std::string vals[] = { g_cfg.mode, g_cfg.address, port, g_cfg.name, g_cfg.faction, g_cfg.password, g_cfg.transport };
+        for (int k = 0; k < 7; ++k)
         {
             bool found = false;
             for (size_t i = 0; i < lines.size(); ++i)
@@ -546,11 +575,13 @@ namespace
                 break;
             case NetEvent::EV_PLAYER_JOINED:
                 log("%s joined (title screen)", e.player.name.c_str());
+                server_onPlayerJoined(e.player.id, e.player.name);
                 g_players[e.player.id] = e.player;
                 if (g_session.isHost()) saveSlots();
                 g_relationPending.insert(e.player.id);
                 break;
             case NetEvent::EV_PLAYER_LEFT:
+                server_onPlayerLeft(e.player.id);
                 g_players.erase(e.player.id);
                 g_relationPending.erase(e.player.id);
                 break;
@@ -615,6 +646,7 @@ namespace
             break;
         case NetEvent::EV_PLAYER_JOINED:
             log("%s joined (faction %s)", e.player.name.c_str(), e.player.faction.c_str());
+            server_onPlayerJoined(e.player.id, e.player.name);
             g_players[e.player.id] = e.player;
             setRelationWith(e.player.id, relationFor(e.player.id));
             resendAll();   // let the newcomer see our squad, gear and town
@@ -626,6 +658,7 @@ namespace
         {
             std::string who = playerName(e.player.id);
             log("player %d left (%s)", (int)e.player.id, e.text.c_str());
+            server_onPlayerLeft(e.player.id);
             onPlayerLeft(e.player.id);
             showMessage(TF("%s left the game", who.c_str()) + (e.text.empty() ? "" : " (" + lang_reason(e.text) + ")"));
             chat_notice(TF("%s left the game", who.c_str()));
@@ -634,6 +667,7 @@ namespace
         case NetEvent::EV_MESSAGE:
             // No game world yet (title screen, loading): world messages cannot be applied.
             // They are not lost: once our world exists we send MSG_RESYNC and get them again.
+            if (server_onMessage(e)) break;   // admin command, bag check, server notice
             if (!worldLoaded() && e.msgType != MSG_CHAT && e.msgType != MSG_FACTION_RELATION && e.msgType != MSG_RESYNC) break;
             handleMessage(e);
             break;
@@ -662,6 +696,12 @@ namespace
     {
         static DWORD t0 = 0;
         static int step = 0;
+        if (g_cfg.autotest && server_isServer())   // a server has no squad to test with: only the authority lines (AUTHORITY_PLAN step A)
+        {
+            static DWORD lastAuth = 0;
+            if (now - lastAuth >= 2000) { lastAuth = now; npcs_debugAuthority(); }
+            return;
+        }
         if (!g_cfg.autotest || step < 0) return;
         uint8_t other = 0; bool found = false;
         for (std::map<uint8_t, PlayerInfo>::iterator it = g_players.begin(); it != g_players.end(); ++it)
@@ -709,6 +749,24 @@ namespace
                 if (shotNo == 6 || shotNo == 7) log("autotest: talk state -> %s", chars_debugTalkState().c_str());
             }
         }
+        // autotest_build=1: its own short script. Each game places a finished building and a blueprint next to its first
+        // character, then advances the blueprint; both report their own buildings and the copies of the other's. Then the
+        // world map is opened (frames with the players' names on it) and closed.
+        if (g_cfg.autotestBuild)
+        {
+            static int bs = 0;
+            float side = g_session.isHost() ? 10.f : -10.f;
+            const char* role = g_session.isHost() ? "host" : "client";
+            if (bs == 0 && s >= 10) { bs = 1; log("autotest: build -> %s", builds_debugPlace(true, side).c_str()); log("autotest: build -> %s", builds_debugPlace(false, side).c_str()); }
+            if (bs == 1 && s >= 20) { bs = 2; log("autotest: build progress -> %s", builds_debugProgress(0.5f).c_str()); }
+            { static DWORD lastRep = 0; if (bs >= 1 && now - lastRep >= 10000) { lastRep = now; log("autotest: buildings -> %s", builds_debugReport().c_str()); } }
+            if (bs == 2 && s >= 35) { bs = 3; chars_debugFocus(me, 0.f, 0.f); }
+            if (bs == 3 && s >= 38) { bs = 4; char f[64]; sprintf_s(f, "kmp_shot_%s_build.png", role); log("autotest: screenshot %s -> %s", f, chars_screenshot(f) ? "saved" : "failed"); }
+            if (bs == 4 && s >= 45) { bs = 5; log("autotest: map -> %s", chars_debugOpenMap(true).c_str()); }
+            if (bs == 5 && s >= 50) { bs = 6; char f[64]; sprintf_s(f, "kmp_shot_%s_map.png", role); log("autotest: screenshot %s -> %s", f, chars_screenshot(f) ? "saved" : "failed"); }
+            if (bs == 6 && s >= 55) { bs = 7; log("autotest: map -> %s", chars_debugOpenMap(false).c_str()); log("autotest: build; done"); }
+            return;
+        }
         // autotest_carry=1: its own short script (other players' knocked-out characters carried, ours carried).
         if (g_cfg.autotestCarry)
         {
@@ -716,7 +774,7 @@ namespace
             static int vs = 0;
             if (vs == 0 && s >= 8)  { vs = 1; ou->setGameSpeed(3.0f, false); log("autotest: speed x3 asked"); }
             if (vs == 1 && s >= 13) { vs = 2; log("autotest: speed while the other player does not agree -> x%.1f", ou->getFrameSpeedMultiplier()); }
-            if (vs == 2 && s >= 26) { vs = 3; log("autotest: speed once the other player agrees -> x%.1f", ou->getFrameSpeedMultiplier()); }
+            if (vs == 2 && s >= 26) { vs = 3; log("autotest: speed once the other player agrees (vote) / changed it (free) -> x%.1f (mode %s)", ou->getFrameSpeedMultiplier(), g_cfg.speedVote ? "vote" : "free"); }
             if (vs == 3 && s >= 28) { vs = 4; ou->setGameSpeed(1.0f, false); log("autotest: speed back to x1"); }
             static int cs = 0;
             if (cs == 0 && s >= 35) { cs = 1; log("autotest: carry -> %s", chars_debugCarryGhost(me).c_str()); }
@@ -828,9 +886,15 @@ namespace
         }
         g_session.setModList(modList(), g_cfg.strictMods);
         g_session.setPassword(g_cfg.password);
+        server_configureSession();
         std::string err;
         bool ok = false;
-        if (g_cfg.mode == "host")
+        if (g_cfg.mode == "server")
+        {
+            loadSlots();
+            ok = g_session.host(g_cfg.port, g_cfg.serverName, "", err);
+        }
+        else if (g_cfg.mode == "host")
         {
             loadSlots();
             ok = g_session.host(g_cfg.port, g_cfg.name, g_cfg.faction, err);
@@ -859,7 +923,7 @@ namespace
         log("session started as %s", g_cfg.mode.c_str());
         if (g_session.isHost())
         {
-            PlayerInfo me; me.id = HOST_ID; me.name = g_cfg.name; me.faction = g_cfg.faction;
+            PlayerInfo me; me.id = HOST_ID; me.name = server_isServer() ? g_cfg.serverName : g_cfg.name; me.faction = g_cfg.faction;
             g_players[HOST_ID] = me;
             g_ready = true;
         }
@@ -921,7 +985,7 @@ namespace
             return;
         }
 
-        // Game speed: it changes only when every player chose the same one (x1 otherwise).
+        // Game speed: by vote (every player on the same one, x1 otherwise) or, speed_vote=0 on the host, anybody's change.
         world_speedTick(GetTickCount());
 
         if (!g_ready) return;
@@ -1013,7 +1077,7 @@ namespace
             Ogre::Vector3 hostAt;
             std::vector<std::pair<uint32_t, Character*> > mine;
             chars_localCharacters(mine);
-            if (!mine.empty() && mine[0].second && chars_playerPosition(HOST_ID, hostAt))
+            if (!g_session.hostIsServer() && !mine.empty() && mine[0].second && chars_playerPosition(HOST_ID, hostAt))
             {
                 float d = mine[0].second->getPosition().distance(hostAt);
                 if (d > REGROUP_HINT_DISTANCE)
@@ -1075,6 +1139,7 @@ namespace
         towns_tick(now);
         bounties_tick(now);
         ground_tick(now);
+        server_clientTick(now);
 
         // Network diagnostics (F7 in game, log every 30 s): ping, bandwidth, ghosts.
         static DWORD lastRate = now;
@@ -1104,6 +1169,7 @@ namespace
 }
 
 bool ready() { return g_ready && g_session.active(); }
+bool server_loadSave(const std::string& name) { return safeLoadSave(name); }
 bool mp_worldLoaded() { return worldLoaded(); }
 std::string mp_modList() { return modList(); }
 std::string mp_configDir()
@@ -1118,6 +1184,7 @@ void log(const char* fmt, ...)
     char buf[512];
     va_list a; va_start(a, fmt); _vsnprintf_s(buf, sizeof(buf), _TRUNCATE, fmt, a); va_end(a);   // truncates instead of aborting the game on a long line
     DebugLog(std::string("KenshiMP: ") + buf);
+    if (g_cfg.mode == "server") server_logLine(buf);
 }
 
 static std::vector<std::string> g_problems;
@@ -1186,6 +1253,7 @@ Faction* factionFor(uint8_t player)
     std::map<uint8_t, Faction*>::iterator it = g_playerFactions.find(player);
     if (it != g_playerFactions.end()) return it->second;
     if (!ou || !ou->factionMgr) return NULL;
+    if (player == HOST_ID && g_session.hostIsServer()) return NULL;   // a dedicated server has no characters, no faction to mirror
 
     char buf[32]; sprintf_s(buf, sizeof(buf), "kenshimp_player_%d", (int)player);
     std::string sid(buf);
@@ -1337,6 +1405,7 @@ static void frameStats()
 void mainLoop_hook(GameWorld* thisptr, float time)
 {
     frameStats();
+    server_frame();
     if (!g_started) { g_started = true; startSession(); }
     if (GetTickCount() - g_lastLobbyTick > 100) { lobby_titleButton(false); lobbyFrame(); }   // in game (title screen hook idle)
     if (ou && ou->isPaused()) lobby_pauseButton();
@@ -1346,11 +1415,13 @@ void mainLoop_hook(GameWorld* thisptr, float time)
     bool live = ready() && worldLoaded();
     if (live) chars_preFrame();
     pump();
+    server_tick(GetTickCount());
     mainLoop_orig(thisptr, time);
     // The engine has updated and placed every body for this frame: now draw ghosts on their
     // smoothed network path (render layer), right before the frame is presented.
     if (live) chars_renderTick(GetTickCount());
     if (live) chars_showPlayerNames(); else chars_clearPlayerNames();
+    if (live) chars_updateMapNames();
 }
 
 __declspec(dllexport) void startPlugin()

@@ -113,7 +113,9 @@ bool world_install()
 namespace
 {
     const uint32_t FLAG_PAUSED = 1;
+    const uint32_t FLAG_SPEED_FREE = 2;   // the host turned speed_vote off: anybody's speed change applies to all
     bool g_hostPaused = false;        // client: last pause state announced by the host
+    bool g_hostSpeedFree = false;     // client: last speed mode announced by the host
     bool g_lastSentPaused = false;    // host: last pause state we announced
     DWORD g_lastPauseNotice = 0;
 
@@ -131,7 +133,7 @@ namespace
     void hostBroadcast(bool paused)
     {
         double h = safeRead();
-        ByteWriter w; w.f64(h); w.u32(paused ? FLAG_PAUSED : 0);
+        ByteWriter w; w.f64(h); w.u32((paused ? FLAG_PAUSED : 0) | (g_cfg.speedVote ? 0 : FLAG_SPEED_FREE));
         g_session.send(MSG_WORLD_SYNC, w.data);
         g_lastSentPaused = paused;
     }
@@ -145,6 +147,7 @@ void world_reset()
 {
     speedReset();
     g_hostPaused = false;   // a new session starts from the host's next announcement
+    g_hostSpeedFree = false;
 }
 
 void world_tick(DWORD now)
@@ -176,43 +179,80 @@ void world_tick(DWORD now)
 }
 
 // --------------------------------------------------------------------------- game speed
-// Everybody simulates the same world, so the speed is common: each player chooses with the game's own buttons, and
-// it applies only when ALL players chose the same one (x1 as long as they disagree). A player's choice is what the
-// speed was set to by hand: when the game's speed differs from what we applied, the player changed it.
+// Everybody simulates the same world, so the speed is common. Two modes, chosen by the host (speed_vote):
+// - vote (default): each player chooses with the game's own buttons, and it applies only when ALL players chose the
+//   same one (x1 as long as they disagree);
+// - free (speed_vote=0): any player's change applies to everybody at once, the latest change wins.
+// A player's choice is what the speed was set to by hand: when the game's speed differs from what we applied, the
+// player changed it. MSG_SPEED = f32 speed, then (free mode) u32 change number + u8 who made that change.
 namespace
 {
     std::map<uint8_t, float> g_wishes;     // other players' chosen speeds
     float g_myWish = 1.f, g_applied = 1.f;
     DWORD g_lastWishSent = 0, g_lastSpeedNotice = 0;
     const DWORD WISH_PERIOD_MS = 3000;
+    // free mode: the latest change anybody made, ordered by (number, player id)
+    float g_freeSpeed = 1.f;
+    uint32_t g_freeSeq = 0;
+    uint8_t g_freeBy = 0;
+    bool g_wasFree = false;
 
     float safeSpeedNow() { __try { return ou->getFrameSpeedMultiplier(); } __except (EXCEPTION_EXECUTE_HANDLER) { return 1.f; } }
     void safeSetSpeed(float v) { __try { ou->setGameSpeed(v, false); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
     float clampSpeed(float v) { return !(v == v) ? 1.f : (v < 1.f ? 1.f : (v > 4.f ? 4.f : v)); }
+    bool speedFree() { return g_session.isHost() ? !g_cfg.speedVote : g_hostSpeedFree; }
     void sendWish()
     {
-        ByteWriter w; w.f32(g_myWish);
+        ByteWriter w;
+        if (speedFree()) { w.f32(g_freeSpeed); w.u32(g_freeSeq); w.u8(g_freeBy); }
+        else w.f32(g_myWish);
         g_session.send(MSG_SPEED, w.data);
         g_lastWishSent = GetTickCount();
     }
 }
 
-float world_debugSpeedWish() { return g_myWish; }
-static void speedReset() { g_wishes.clear(); g_myWish = g_applied = 1.f; }
+float world_debugSpeedWish() { return speedFree() ? g_freeSpeed : g_myWish; }
+static void speedReset() { g_wishes.clear(); g_myWish = g_applied = g_freeSpeed = 1.f; g_freeSeq = 0; g_freeBy = 0; g_wasFree = false; }
 
 void world_onSpeed(const NetEvent& e)
 {
     ByteReader r(e.body);
-    float v = r.f32();
+    float v = clampSpeed(r.f32());
     if (!r.ok() || e.sender == g_session.localId()) return;
-    g_wishes[e.sender] = clampSpeed(v);
+    g_wishes[e.sender] = v;
+    uint32_t seq = r.u32();
+    uint8_t by = r.u8();
+    if (!r.ok() || !speedFree()) return;   // vote mode (or an old sender): only the wish counts
+    if (seq > g_freeSeq || (seq == g_freeSeq && by > g_freeBy))
+    {
+        bool changed = fabsf(v - g_freeSpeed) > 0.01f;
+        g_freeSeq = seq; g_freeBy = by; g_freeSpeed = v;
+        if (changed && by != g_session.localId()) showMessage(TF("%s set the game speed to x%.0f.", playerName(by).c_str(), v));
+    }
 }
 
 void world_onPlayerLeft(uint8_t id) { g_wishes.erase(id); }
 
+static void freeSpeedTick(DWORD now, float cur)
+{
+    if (!g_wasFree) { g_wasFree = true; g_freeSpeed = g_applied; }   // switching from vote: keep the current speed
+    if (fabsf(cur - g_applied) > 0.01f)   // our own change: it applies to everybody
+    {
+        g_freeSpeed = clampSpeed(cur);
+        ++g_freeSeq; g_freeBy = g_session.localId();
+        sendWish();
+    }
+    else if (now - g_lastWishSent >= WISH_PERIOD_MS) sendWish();   // newcomers learn it too
+    if (fabsf(g_freeSpeed - cur) > 0.01f) safeSetSpeed(g_freeSpeed);
+    g_applied = g_freeSpeed;
+    g_myWish = g_freeSpeed;
+}
+
 void world_speedTick(DWORD now)
 {
     float cur = safeSpeedNow();
+    if (speedFree()) { freeSpeedTick(now, cur); return; }
+    g_wasFree = false;
     if (fabsf(cur - g_applied) > 0.01f)   // the player used the speed buttons (or a load reset it)
     {
         g_myWish = clampSpeed(cur);
@@ -256,6 +296,11 @@ void world_onMessage(const NetEvent& e)
     uint32_t flags = r.u32();
     if (!r.ok()) return;
     g_hostPaused = (flags & FLAG_PAUSED) != 0;
+    bool freeNow = (flags & FLAG_SPEED_FREE) != 0;
+    if (freeNow != g_hostSpeedFree)
+        chat_notice(freeNow ? T("Game speed: free (anybody's change applies to everybody).")
+                            : T("Game speed: by vote (it changes when every player chose the same)."));
+    g_hostSpeedFree = freeNow;
     if (!(hostHours >= 0 && hostHours < 1.0e7)) return;   // also rejects NaN
     double mine = safeRead();
     if (mine < 0) return;
